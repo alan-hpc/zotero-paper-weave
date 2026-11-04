@@ -2,7 +2,7 @@
 
 I am sharing an independent open-source add-on for a paper-reading workflow:
 select a PDF, identify paper-specific terminology, translate paragraph by paragraph, and create
-a new PDF attachment with each English paragraph followed by Chinese.
+a new PDF attachment with English on the left (60%) and Chinese on the right (40%), paragraph aligned.
 
 Translations can be edited and saved in a local project, then rebuilt without retranslating the
 whole paper. Figures, captions, tables and displayed formulas retain original PDF content.
@@ -12,7 +12,7 @@ Source: https://github.com/alan-hpc/zotero-paper-weave
 
 Releases: https://github.com/alan-hpc/zotero-paper-weave/releases
 
-This is **0.1.0-alpha.1**, a development preview. It has been type-checked and packaged but has
+This is **0.1.0-alpha.2**, a development preview. It has passed type checking, offline smoke checks and PDF visual review but has
 **not yet been validated end to end inside Zotero**. Feedback from developers is especially welcome.
 It requires Zotero 10's structured-document API. OCR and rotated pages are not supported in this
 first version. Layout classification requires review. New PDFs retain old versions rather than

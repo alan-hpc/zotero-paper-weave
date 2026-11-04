@@ -14,7 +14,7 @@ let revision = 0;
 let saving = Promise.resolve();
 let abort: AbortController | undefined;
 let autosave: ReturnType<typeof setTimeout> | undefined;
-const actions = ['terms-action','translate','generate','retranslate','import','export','save-edit','save-terms','save-settings','delete-key'];
+const actions = ['start','terms-action','translate','generate','retranslate','import','export','save-edit','save-terms','save-settings','delete-key','import-settings','prefer-original'];
 const status = (s: string, error = false) => { $('status').textContent = s; $('status').classList.toggle('error', error); };
 function showSettings() {
   const s: Settings = host.settings();
@@ -23,14 +23,14 @@ function showSettings() {
   input('key').placeholder = has ? '已保存；留空保留现有 Key' : '输入 API Key；本地服务可留空';
   $('key-status').textContent = has ? '当前端点已保存 Key' : '当前端点未保存 Key';
 }
-function persistSettings(remove = false) {
+async function persistSettings(remove = false) {
   const settings: Settings = { baseURL: input('base').value.trim(), model: input('model').value.trim(), prompt: area('prompt').value };
-  host.saveSettings(settings, input('key').value.trim(), remove);
+  await host.saveSettings(settings, input('key').value.trim(), remove);
   input('key').value = ''; showSettings();
   return settings;
 }
-function provider(signal: AbortSignal) {
-  const settings = persistSettings();
+async function provider(signal: AbortSignal) {
+  const settings = await persistSettings();
   const url = new URL(endpoint(settings.baseURL));
   const key = host.apiKey(settings.baseURL);
   if (!key && !['localhost','127.0.0.1','[::1]'].includes(url.hostname)) {
@@ -42,15 +42,18 @@ function provider(signal: AbortSignal) {
 const labels: Record<Kind,string> = { body:'正文', heading:'标题', figure:'图', caption:'图注 / 表注', table:'表格', math:'公式', code:'代码', reference:'参考文献', keep:'保留英文' };
 function updateControls() {
   document.body.classList.toggle('busy', busy);
-  for (const id of actions) ($<HTMLButtonElement>(id)).disabled = busy || (!project && !['save-settings','delete-key'].includes(id));
+  for (const id of actions) ($<HTMLButtonElement>(id)).disabled = busy || (!project && !['save-settings','delete-key','import-settings'].includes(id));
   ($<HTMLButtonElement>('cancel')).disabled = !busy;
-  for (const id of ['kind','translation','terms','base','model','key','prompt','appendix']) (input(id)).disabled = busy || (!project && !['base','model','key','prompt'].includes(id));
+  for (const id of ['kind','translation','terms','base','model','key','prompt','appendix','make-preferred']) (input(id)).disabled = busy || (!project && !['base','model','key','prompt'].includes(id));
   area('translation').disabled = busy || !selected || !canTranslate(selected);
   $<HTMLButtonElement>('retranslate').disabled = busy || !selected || !canTranslate(selected);
 }
 function list() {
   const root = $('block-list'); root.replaceChildren();
   if (!project) return;
+  const translatable = project.blocks.filter(canTranslate);
+  const translated = translatable.filter(b => b.translation.trim()).length;
+  $('project-summary').textContent = `已翻译 ${translated}/${translatable.length} 段 · 保留原文 ${project.blocks.length-translatable.length} 个区域`;
   const filter = ($<HTMLSelectElement>('filter')).value;
   for (const b of project.blocks) {
     if ((filter === 'pending' && (!canTranslate(b) || !!b.translation.trim())) ||
@@ -75,7 +78,7 @@ function select(block: Block) {
 function refresh() {
   if (!project) return;
   area('terms').value = project.terms.map(t => t.source).join('\n');
-  $('terms-action').textContent = project.terminologyReady ? '1 重新识别术语（覆盖词表）' : '1 识别本文术语';
+  $('terms-action').textContent = project.terminologyReady ? '重新识别术语（覆盖词表）' : '识别本文术语';
   if (selected) select(project.blocks.find(b => b.id === selected!.id) || project.blocks[0]);
   else if (project.blocks.length) select(project.blocks[0]);
   updateControls();
@@ -112,12 +115,16 @@ async function run(job: (signal: AbortSignal) => Promise<void>) {
 function bind(id: string, fn: () => void | Promise<void>) {
   $(id).addEventListener('click', () => { Promise.resolve().then(fn).catch(e => status(e.message,true)); });
 }
-bind('save-settings', () => { persistSettings(); status('模型设置已保存。'); });
-bind('delete-key', () => { persistSettings(true); status('已删除当前端点的 Key。'); });
+bind('save-settings', async () => { await persistSettings(); status('模型设置已保存。'); });
+bind('delete-key', async () => { await persistSettings(true); status('已删除当前端点的 Key。'); });
+bind('import-settings', async () => {
+  const result = await host.importHJFYSettings(); showSettings();
+  status(result.importedKey ? '已导入幻觉翻译的模型与 Key，Key 未显示。' : '已导入模型配置，请补充 API Key。');
+});
 bind('save-edit', async () => { await save(); status('修订已保存；点击生成 PDF 即可重排。'); });
 bind('cancel', () => { abort?.abort(); status('正在取消；本地结构分析可能需要等待当前步骤结束…'); });
 bind('terms-action', () => run(async signal => {
-  const { client } = provider(signal);
+  const { client } = await provider(signal);
   project!.terms = await client.terms(project!.blocks, status);
   project!.terminologyReady = true;
   await save(); status(`已识别 ${project!.terms.length} 个本文术语，可展开词表修改。`);
@@ -129,8 +136,7 @@ bind('save-terms', async () => {
   project.terms = terms.map(source => ({ source, reason: '用户词表' }));
   project.terminologyReady = true; await save(); status(`已保存 ${terms.length} 个术语。`);
 });
-bind('translate', () => run(async signal => {
-  const { client, settings } = provider(signal);
+async function translateRemaining(client: Provider, settings: Settings, signal: AbortSignal) {
   if (!project!.terminologyReady) {
     project!.terms = await client.terms(project!.blocks,status);
     project!.terminologyReady = true; await save();
@@ -142,22 +148,34 @@ bind('translate', () => run(async signal => {
     await save(); list();
   }
   status(pending.length ? `翻译完成，共 ${pending.length} 段。可逐段修订，或生成 PDF。` : '所有正文段落均已有译文。');
+}
+bind('translate', () => run(async signal => {
+  const { client, settings } = await provider(signal);
+  await translateRemaining(client, settings, signal);
 }));
 bind('retranslate', () => run(async signal => {
   if (!selected || !canTranslate(selected)) return;
-  const { client, settings } = provider(signal);
+  const { client, settings } = await provider(signal);
   status(`正在重新翻译 ${selected.id}…`);
   recordTranslation(selected, await client.translate(selected,project!),settings);
   await save(); status('本段已重新翻译并保存。');
 }));
-bind('generate', () => run(async signal => {
+async function generatePDF(signal: AbortSignal) {
   status('正在准备 PDF 排版…');
   const bytes = await host.sourceBytes(host.item,project);
   const font = await host.fontBytes();
   const output = await render(project!, new Uint8Array(bytes), new Uint8Array(font), input('appendix').checked, signal,status);
   signal.throwIfAborted();
-  await host.attachPDF(host.item,project,output);
-  status('已生成新双语 PDF 附件，并在 Zotero 中打开。');
+  const result = await host.attachPDF(host.item,project,output,input('make-preferred').checked);
+  status(result.preferenceError ? `双语 PDF 已生成。优先打开未生效：${result.preferenceError}` :
+    result.preferredSet ? '已生成 60/40 双语 PDF，并设为这篇论文优先打开的附件。' : '已生成 60/40 双语 PDF，并在 Zotero 中打开。');
+}
+bind('generate', () => run(generatePDF));
+bind('prefer-original', () => run(async () => { await host.preferOriginal(host.item); status('这篇论文已改为优先打开原文。'); }));
+bind('start', () => run(async signal => {
+  const { client, settings } = await provider(signal);
+  await translateRemaining(client, settings, signal);
+  await generatePDF(signal);
 }));
 bind('export', () => run(async () => { await host.exportProject(window, project); status('导出操作完成。项目包含论文文本，请按需要保管。'); }));
 bind('import', () => run(async () => { const p = await host.importProject(window,host.item,project); if (p) { project = p; status('已导入修订；可以重新生成 PDF。'); } }));
@@ -179,6 +197,7 @@ window.addEventListener('unload', () => { abort?.abort(); clearTimeout(autosave)
 };
 void (async () => {
   showSettings(); updateControls();
+  input('make-preferred').checked = host.preferBilingual();
   $('paper-title').textContent = host.item.getField('title');
   await run(async signal => {
     project = await host.loadProject(host.item,status,signal);

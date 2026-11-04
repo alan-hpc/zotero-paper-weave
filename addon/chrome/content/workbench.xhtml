@@ -19,13 +19,16 @@
       <label>API Key<input id="key" type="password" autocomplete="off" placeholder="留空可使用本地无密钥服务" /></label>
     </div>
     <label>补充翻译偏好（可选）<textarea id="prompt" rows="2" placeholder="例如：行文简洁，保留原文中的所有符号。"></textarea></label>
-    <div class="row"><button id="save-settings">保存设置</button><button id="delete-key" class="subtle">删除此端点的 Key</button><span id="key-status"></span></div>
+    <div class="row"><button id="save-settings">保存设置</button><button id="import-settings">从幻觉翻译导入配置与 Key</button><button id="delete-key" class="subtle">删除此端点的 Key</button><span id="key-status"></span></div>
     <p class="hint">点击识别术语或翻译会将对应论文文本发送到此端点，并可能产生费用。Key 存于 Zotero 凭据管理器；不会写入翻译项目或 PDF。</p>
   </details>
   <nav aria-label="翻译操作">
-    <button id="terms-action">1 识别本文术语</button><button id="translate" class="primary">2 翻译未完成段落</button>
-    <button id="generate" class="primary">3 生成并导入双语 PDF</button><button id="cancel" disabled="disabled">取消</button>
+    <button id="start" class="primary">翻译并生成 PDF</button>
+    <button id="generate">保存新版 PDF（本地重排）</button><button id="cancel" disabled="disabled">取消</button>
   </nav>
+  <p class="hint">排版 B · 英文左侧 60% / 中文右侧 40% · 段落对齐 · 中间竖线</p>
+  <p id="project-summary" class="hint">尚未载入翻译项目</p>
+  <details><summary>分步操作：词表与翻译</summary><div class="row"><button id="terms-action">识别本文术语</button><button id="translate">仅翻译未完成段落</button></div><p class="hint">也可以先复核词表再翻译。「翻译并生成 PDF」会自动识别术语、翻译剩余段落并导入附件；已有译文会保留。</p></details>
   <p class="notice">版面识别可能有误。请复核正文与图表分类；图表、图注、表格、公式、代码及参考文献默认保留原文。扫描件需先 OCR。</p>
   <div id="status" role="status" aria-live="polite">准备中…</div>
   <main>
@@ -39,8 +42,10 @@
   </main>
   <details id="terms-panel"><summary>本文术语表（每行一个；保留英文原样）</summary><textarea id="terms" rows="6" spellcheck="false"></textarea><p class="hint">自动识别后可增删。变更词表会用于之后的翻译；已有译文需选择对应段落重新翻译。每篇论文使用独立词表。</p><button id="save-terms">保存词表</button></details>
   <footer>
+    <label class="inline"><input id="make-preferred" type="checkbox" checked="checked" />生成后优先打开双语 PDF</label>
     <label class="inline"><input id="appendix" type="checkbox" checked="checked" />附加完整原 PDF，便于复核遗漏</label>
-    <div class="row"><button id="export">导出修订项目</button><button id="import">导入修订项目（覆盖译文）</button></div>
+    <div class="row"><button id="prefer-original">优先打开原文</button><button id="export">导出修订项目</button><button id="import">导入修订项目（覆盖译文）</button></div>
     <p class="hint">项目自动保存在本机 Zotero 数据目录，默认不随 Zotero 同步。每次生成新 PDF 附件；旧版批注不会自动迁移。</p>
+    <p class="hint">优先打开选择保存在本机，重启后保留；停用插件后使用 Zotero 默认顺序。原文附件始终保留。</p>
   </footer>
 </body></html>

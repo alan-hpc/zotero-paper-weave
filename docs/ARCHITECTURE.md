@@ -10,7 +10,7 @@ flowchart LR
     D --> E[Paragraph translation]
     E --> F[Manual revision]
     F --> C
-    C --> G[Vector English + Chinese PDF]
+    C --> G[60/40 English + Chinese PDF]
     G --> H[New Zotero attachment]
 ```
 
@@ -30,10 +30,17 @@ no redirects, 120-second request timeout, cancel support, and bounded retries fo
 transient HTTP errors. API bodies are not copied to user errors. Paper text is labeled as untrusted
 data. Model JSON and terminology placeholders are checked before saving.
 
-`render.ts` never retypes English. It clips and embeds the original PDF page content with pdf-lib,
-then draws the corresponding Chinese paragraph with an embedded OFL font. Protected blocks are
+`render.ts` reflows ordinary English prose and aligns each paragraph with Chinese in a 60/40
+landscape layout. English with mathematical or unsupported typography uses original PDF snippets.
+Chinese uses a complete embedded OFL font to avoid TrueType subsetting glyph loss. Protected blocks are
 embedded once without translation. An optional full-source appendix guards against extraction
 omissions. It does not preserve source annotations in clipped snippets.
+
+`preferred.ts` persists per-paper output attachment keys in local preferences. While enabled it
+wraps `Item.getBestAttachments`, reorders only a valid selected PDF belonging to the same parent,
+and clears the host best-attachment cache. The native method is restored on shutdown; no dates,
+URLs, original files or database tables are rewritten. Missing targets fall back to native order.
+The preference is local and is not synced across devices.
 
 ## Project schema 1
 
@@ -75,4 +82,6 @@ on old attachments. Automatic migration of annotation positions is outside this 
 No in-app runtime validation has been performed for this release. Host API availability, privileged
 window loading, clipped-vector text selection, library permissions, cancellation during extraction,
 and generated PDF layout need real Zotero validation before a stable release. The development
-workflow currently performs type checking and builds only; the repository contains no test suite.
+workflow runs type checking, offline smoke checks and packaging. The smoke suite covers bootstrap
+globals, preference lifecycle and layout geometry/pagination/manual revisions. It does not replace
+real Zotero installation, SDT, credential and model testing.

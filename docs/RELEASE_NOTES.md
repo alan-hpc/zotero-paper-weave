@@ -1,22 +1,23 @@
-# PaperWeave 0.1.0-alpha.1
+# PaperWeave 0.1.0-alpha.2
 
-初始开发预览版 / Initial development preview.
+## 本次更新
 
-下载 `.xpi` 后，通过 Zotero → 工具 → 插件 → 从文件安装。
-需要 Zotero 10。此版本尚未完成 Zotero 内端到端运行验证。
+- 默认使用选定的 B 版：英文左侧 60%、中文右侧 40%，竖线分隔、逐段对齐。
+- 生成后默认优先打开最新版双语 PDF；原论文和旧版附件保留。可在工作台切回优先原文。
+- 首选附件记录保存在本机，重启后保留，停用插件后恢复 Zotero 默认顺序；不自动跨设备同步。
+- 阅读器「织译」按钮、Alt+Shift+T 快捷键、一键翻译并生成、从幻觉翻译导入配置。
+- 修复 alpha.1 启动菜单与凭据保存问题、修复 CJK 字体子集缺字。
+- 修订后点击「保存新版 PDF（本地重排）」，无需整篇重新翻译。
 
-## Included
+## 安装
 
-- Paragraph English–Chinese PDF generation and manual translation revisions.
-- Per-paper English terminology, original figures/captions/tables/formulas.
-- User-configured compatible model API, local cache, new attachment versions.
-- Project import/export and an optional complete original-PDF appendix.
+下载 `.xpi`，通过 Zotero → 工具 → 插件 → 齿轮 → 从文件安装，覆盖已安装版本。
+需要 Zotero 10。Alpha 版需手动下载更新，GitHub 的 latest 地址不会选择预发布版。
 
-## Validation and limitations
+## 验证范围
 
-TypeScript type checking and the XPI build were performed. No in-app runtime testing was performed.
-Treat this as an alpha for development feedback. Review block classification against the original.
-No OCR, rotated-page support, annotation migration or automatic project sync is included.
-Model calls may incur fees and send paper text to the configured provider.
+已完成 TypeScript 检查、离线回归检查（启动全局变量、首选附件持久化/回退/恢复、60/40 排版和分页）、
+四页合成 PDF 及修订版本的渲染复核。尚未完成 Zotero 内端到端运行和真实模型请求验证。
 
-See README for configuration, data handling and contribution guidance.
+正文分类需复核。图表、图注、表格保留原文，术语逐篇识别。无 OCR、旋转页面、批注迁移和项目自动同步。
+模型调用会向配置的服务发送相应论文文本，可能产生费用。完整数据说明见 README。

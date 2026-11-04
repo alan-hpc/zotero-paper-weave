@@ -1,19 +1,39 @@
 import { Project, Settings, now, validateProject } from './model';
 import { extractProject } from './extract';
 import { endpoint } from './provider';
+import { PreferredAttachments } from './preferred';
 
 let meta: { id: string; version: string; rootURI: string };
 const menus = new Map<any, { nodes: any[]; popup: any; listener: any }>();
 const windows = new Map<string, any>();
 const locks = new Set<string>();
+let toolbarHandler: ((event: any) => void) | undefined;
+const readerButtons = new Set<any>();
 let active = false;
+let preferred: PreferredAttachments;
 let indexWrites = Promise.resolve();
 const pref = 'extensions.paperweave.';
 const origin = 'chrome://paperweave';
 const realm = (base: string) => endpoint(base);
 const directory = () => PathUtils.join(Zotero.DataDirectory.dir, 'paperweave');
 
-export function start(m: typeof meta) { meta = m; active = true; }
+export function start(m: typeof meta) {
+  meta = m; active = true;
+  preferred = new PreferredAttachments(Zotero);
+  preferred.install();
+  if (Zotero.Reader?.registerEventListener) {
+    toolbarHandler = ({ reader, doc, append }: any) => {
+      const button = doc.createElement('button');
+      button.textContent = '织译';
+      button.title = 'PaperWeave：翻译 / 修订当前 PDF';
+      button.setAttribute('aria-label', 'PaperWeave 翻译或修订当前 PDF');
+      button.style.cssText = 'padding:0 8px;min-width:44px;font-size:12px;white-space:nowrap;';
+      button.addEventListener('click', () => void open(Zotero.getMainWindow(), reader.itemID));
+      readerButtons.add(button); append(button);
+    };
+    Zotero.Reader.registerEventListener('renderToolbar', toolbarHandler, meta.id);
+  }
+}
 export function settings(): Settings {
   return {
     baseURL: Zotero.Prefs.get(pref + 'baseURL', true) || 'https://api.deepseek.com/v1',
@@ -24,18 +44,36 @@ export function settings(): Settings {
 function logins(base: string): any[] { return Services.logins.findLogins(origin, null, realm(base)); }
 export function hasKey(base: string) { return logins(base).length > 0; }
 export function apiKey(base: string) { return logins(base)[0]?.password || ''; }
-export function saveSettings(value: Settings, key: string, removeKey = false) {
+export async function saveSettings(value: Settings, key: string, removeKey = false) {
   endpoint(value.baseURL);
   if (!value.model.trim()) throw new Error('请填写模型名称。');
   if (removeKey || key) {
-    for (const entry of logins(value.baseURL)) Services.logins.removeLogin(entry);
+    const existing = logins(value.baseURL);
+    if (removeKey) for (const entry of existing) Services.logins.removeLogin(entry);
     if (key && !removeKey) {
       const entry = Cc['@mozilla.org/login-manager/loginInfo;1'].createInstance(Ci.nsILoginInfo);
       entry.init(origin, null, realm(value.baseURL), 'api-key', key, '', '');
-      Services.logins.addLogin(entry);
+      if (existing.length) Services.logins.modifyLogin(existing[0], entry);
+      else await Services.logins.addLoginAsync(entry);
+      for (const duplicate of existing.slice(1)) Services.logins.removeLogin(duplicate);
     }
   }
   for (const name of ['baseURL','model','prompt'] as const) Zotero.Prefs.set(pref + name, value[name].trim(), true);
+}
+export async function importHJFYSettings() {
+  let models: any;
+  try { models = JSON.parse(Zotero.Prefs.get('extensions.zotero.hjfy.models', true) || '[]'); }
+  catch { throw new Error('幻觉翻译的模型配置无法读取，请手动填写。'); }
+  const model = Array.isArray(models) ? models[0] : null;
+  if (!model || typeof model.baseURL !== 'string' || typeof model.model !== 'string') {
+    throw new Error('未找到幻觉翻译的模型配置，请手动填写。');
+  }
+  endpoint(model.baseURL);
+  const identity = model.baseURL.replace(/\/$/,'') + '\n' + model.model;
+  const entry = Services.logins.findLogins('chrome://hjfy-zotero',null,'HJFY API Key')
+    .find((login: any) => login.username === identity);
+  await saveSettings({baseURL:model.baseURL,model:model.model,prompt:settings().prompt},entry?.password || '');
+  return { importedKey: !!entry };
 }
 async function ensureDir() { await IOUtils.makeDirectory(directory(), { ignoreExisting: true, permissions: 0o700 }); }
 function projectPath(item: any, hash: string) {
@@ -68,7 +106,7 @@ export async function loadProject(item: any, progress: (s: string) => void, sign
   if (!path || !await IOUtils.exists(path)) throw new Error('PDF 尚未下载，请先在 Zotero 打开原始附件。');
   const hash = await item.attachmentHash;
   const existing = await readJSON(projectPath(item, hash));
-  if (existing) { validateProject(existing); return existing; }
+  if (existing) { validateProject(existing); existing.pluginVersion = meta.version; return existing; }
   const project = await extractProject(Zotero, item, meta.version, progress, signal);
   await saveProject(project);
   return project;
@@ -81,7 +119,12 @@ export async function fontBytes() {
   const request = await Zotero.HTTP.request('GET', meta.rootURI + 'chrome/content/fonts/NotoSansSC.ttf', { responseType: 'arraybuffer' });
   return new Uint8Array(request.response);
 }
-export async function attachPDF(item: any, project: Project, bytes: Uint8Array) {
+export function preferBilingual() { return Zotero.Prefs.get(pref + 'preferBilingual', true) !== false; }
+export async function preferOriginal(item: any) {
+  if (!item.parentID) throw new Error('独立 PDF 没有父论文条目；请直接打开原文附件。');
+  await preferred.select(await Zotero.Items.getAsync(item.parentID), item);
+}
+export async function attachPDF(item: any, project: Project, bytes: Uint8Array, makePreferred = true) {
   if (!active) throw new Error('插件已停用。');
   await sourceBytes(item, project); // Check identity immediately before importing.
   if (!Zotero.Libraries.get(item.libraryID).editable || !Zotero.Libraries.get(item.libraryID).filesEditable) {
@@ -92,7 +135,7 @@ export async function attachPDF(item: any, project: Project, bytes: Uint8Array) 
   const temp = PathUtils.join(Zotero.getTempDirectory().path, filename);
   await IOUtils.write(temp, bytes, { permissions: 0o600 });
   try {
-    const args: any = { file: temp, title: `英中逐段 · ${project.source.title} · ${stamp.slice(0,19)}`,
+    const args: any = { file: temp, title: `双语 60-40 · ${project.source.title} · ${stamp.slice(0,19)}`,
       fileBaseName: filename.slice(0,-4), renameIfAllowedType: false };
     if (item.parentID) args.parentItemID = item.parentID;
     else { args.libraryID = item.libraryID; args.collections = item.getCollections(); }
@@ -106,8 +149,15 @@ export async function attachPDF(item: any, project: Project, bytes: Uint8Array) 
       await writeJSON(path, index);
     });
     await indexWrites;
+    Zotero.Prefs.set(pref + 'preferBilingual', makePreferred, true);
+    let preferredSet = false;
+    let preferenceError = '';
+    if (makePreferred && item.parentID) {
+      try { await preferred.select(await Zotero.Items.getAsync(item.parentID), attachment); preferredSet = true; }
+      catch (e: any) { preferenceError = e.message; }
+    }
     await Zotero.Reader.open(attachment.id);
-    return attachment.key;
+    return { key: attachment.key, preferredSet, preferenceError };
   } finally { await IOUtils.remove(temp, { ignoreAbsent: true }); }
 }
 export async function exportProject(window: any, project: Project) {
@@ -152,6 +202,8 @@ export function acquire(item: any) {
   return () => locks.delete(id);
 }
 async function chooseItem(window: any) {
+  const reader = Zotero.Reader.getByTabID(window.Zotero_Tabs?.selectedID);
+  if (reader?.itemID) return sourceOf(await Zotero.Items.getAsync(reader.itemID));
   const selected = window.ZoteroPane.getSelectedItems();
   if (selected.length !== 1) throw new Error('请只选择一个 PDF 附件或一篇论文。');
   let item = selected[0];
@@ -161,18 +213,22 @@ async function chooseItem(window: any) {
     const attachments = await Zotero.Items.getAsync(ids);
     const pdfs = attachments.filter((a: any) => !a.deleted && a.isPDFAttachment());
     if (!pdfs.length) throw new Error('这篇论文没有 PDF 附件。');
-    if (pdfs.length > 1) throw new Error('这篇论文有多个 PDF，请展开条目并选中要翻译的 PDF。');
-    item = pdfs[0];
+    if (pdfs.length > 1) {
+      const best = await item.getBestAttachment();
+      const original = best && await sourceOf(best);
+      if (!original?.isPDFAttachment()) throw new Error('请展开论文条目并选择原始 PDF。');
+      item = original;
+    } else item = pdfs[0];
   }
   return sourceOf(item);
 }
-async function open(window: any) {
+async function open(window: any, itemID?: number) {
   try {
-    const item = await chooseItem(window);
+    const item = itemID ? await sourceOf(await Zotero.Items.getAsync(itemID)) : await chooseItem(window);
     const key = `${item.libraryID}:${item.key}`;
     if (windows.get(key) && !windows.get(key).closed) { windows.get(key).focus(); return; }
-    const bridge = { item, meta, settings, hasKey, apiKey, saveSettings, loadProject, saveProject,
-      sourceBytes, fontBytes, attachPDF, exportProject, importProject, acquire };
+    const bridge = { item, meta, settings, hasKey, apiKey, saveSettings, importHJFYSettings, loadProject, saveProject,
+      sourceBytes, fontBytes, attachPDF, preferBilingual, preferOriginal, exportProject, importProject, acquire };
     const w = window.openDialog('chrome://paperweave/content/workbench.xhtml', '',
       'chrome,resizable,centerscreen,width=1140,height=840', bridge);
     windows.set(key, w);
@@ -193,6 +249,13 @@ export function attach(window: any) {
   const popup = d.getElementById('zotero-itemmenu');
   create(popup, 'paperweave-itemmenu');
   create(d.getElementById('menu_ToolsPopup'), 'paperweave-tools');
+  // One shortcut works both in the library and in a PDF reader tab.
+  const keyset = d.createXULElement('keyset');
+  keyset.id = 'paperweave-keyset';
+  const key = d.createXULElement('key');
+  key.setAttribute('key', 'T'); key.setAttribute('modifiers', 'alt,shift');
+  key.addEventListener('command', () => void open(window));
+  keyset.appendChild(key); d.documentElement.appendChild(keyset); nodes.push(keyset);
   const listener = () => {
     const n = d.getElementById('paperweave-itemmenu');
     if (n) n.disabled = window.ZoteroPane.getSelectedItems().length !== 1;
@@ -209,6 +272,11 @@ export async function stop() {
   await Promise.allSettled([...windows.values()].filter(w => !w.closed)
     .map(w => w.paperWeaveBeforeShutdown?.()));
   active = false;
+  preferred?.uninstall();
+  if (toolbarHandler) Zotero.Reader.unregisterEventListener?.('renderToolbar', toolbarHandler);
+  toolbarHandler = undefined;
+  for (const button of readerButtons) button.remove();
+  readerButtons.clear();
   for (const w of windows.values()) { if (!w.closed) w.close(); }
   windows.clear(); locks.clear();
   for (const w of menus.keys()) detach(w);

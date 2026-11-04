@@ -14,7 +14,7 @@
 - Reader selection → jump to paragraph editor.
 - Paragraph anchors and a revision log linking output versions.
 - A visual layout editor to split/merge regions and repair missed figure bounds.
-- Side-by-side renderer using the same saved project.
+- User-selectable layouts beyond the default 60/40 side-by-side renderer.
 - Glossary matching for normalized ligatures and carefully controlled variants.
 - Better inline-math preservation and typography.
 - Export CSV/XLSX and Markdown alongside JSON.
