@@ -88,7 +88,7 @@ export async function extractProject(host: any, item: any, version: string,
   return {
     schema: 1, pluginVersion: version,
     source: { libraryID: item.libraryID, key: item.key, hash: await item.attachmentHash,
-      title: item.getField('title') || 'Paper' },
+      title: item.parentItem?.getField('title') || item.getField('title') || 'Paper' },
     pages, blocks, terms: [], terminologyReady: false, outputs: [], created: now(), updated: now()
   };
 }

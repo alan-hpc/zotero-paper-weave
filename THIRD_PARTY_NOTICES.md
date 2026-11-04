@@ -10,10 +10,11 @@ PaperWeave's own source code is MIT licensed. Bundled dependencies retain their 
 | @pdf-lib/upng | see package-lock.json | MIT | https://github.com/Hopding/upng |
 | pako (transitive) | see package-lock.json | MIT | https://github.com/nodeca/pako |
 | tslib (transitive) | see package-lock.json | 0BSD | https://github.com/microsoft/tslib |
-| Noto Sans SC | bundled font | SIL Open Font License 1.1 | https://github.com/google/fonts/tree/main/ofl/notosanssc |
+| Noto Serif SC | bundled font | SIL Open Font License 1.1 | https://github.com/notofonts/noto-cjk |
+| Sarasa Mono SC | 1.0.40 | SIL Open Font License 1.1 | https://github.com/be5invis/Sarasa-Gothic |
 
 Dependency license texts are included in the XPI under `licenses/`. The font license is at
-`chrome/content/fonts/OFL.txt`. Font provenance and any changes are recorded beside the font.
+`chrome/content/fonts/NotoSerif-OFL.txt` and `chrome/content/fonts/Sarasa-OFL.txt`. Font provenance and any changes are recorded beside the font.
 Build tools (esbuild, TypeScript) are development dependencies; their code is not a plugin runtime dependency.
 
 The @pdf-lib/fontkit fork by Andrew Dillon declares MIT in its package metadata and README, but

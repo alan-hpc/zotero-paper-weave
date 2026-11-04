@@ -2,6 +2,7 @@ import { Block, Kind, Project, Settings, canTranslate } from './model';
 import { Provider, endpoint, recordTranslation } from './provider';
 import { render } from './render';
 
+async function initialize() {
 const host = (window as any).arguments[0];
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id)! as T;
 const input = (id: string) => $<HTMLInputElement>(id);
@@ -164,7 +165,10 @@ async function generatePDF(signal: AbortSignal) {
   status('正在准备 PDF 排版…');
   const bytes = await host.sourceBytes(host.item,project);
   const font = await host.fontBytes();
-  const output = await render(project!, new Uint8Array(bytes), new Uint8Array(font), input('appendix').checked, signal,status);
+  const monoFont = await host.monoFontBytes();
+  const rasterize = await host.sourceRenderer(host.item);
+  const output = await render(project!, new Uint8Array(bytes), new Uint8Array(font), input('appendix').checked, signal,status,
+    undefined,{monoFontBytes:new Uint8Array(monoFont),rasterize});
   signal.throwIfAborted();
   const result = await host.attachPDF(host.item,project,output,input('make-preferred').checked);
   status(result.preferenceError ? `双语 PDF 已生成。优先打开未生效：${result.preferenceError}` :
@@ -195,7 +199,6 @@ window.addEventListener('unload', () => { abort?.abort(); clearTimeout(autosave)
   await save();
   busy = false; dirty = false;
 };
-void (async () => {
   showSettings(); updateControls();
   input('make-preferred').checked = host.preferBilingual();
   $('paper-title').textContent = host.item.getField('title');
@@ -205,4 +208,16 @@ void (async () => {
     if (project!.pages.some(p => p.extractionDegraded)) status('部分页面的版面分析已降级，请与原文逐页复核，并保留原文附录。');
   });
   if (!host.hasKey(host.settings().baseURL)) ($('settings-panel') as HTMLDetailsElement).open = true;
-})().catch(e => status(e.message,true));
+}
+
+function start() {
+  (window as any).paperWeaveReady = initialize().catch((error: any) => {
+    const output = document.getElementById('status');
+    if (output) {
+      output.textContent = `工作台初始化失败：${error.message || '未知错误'}`;
+      output.classList.add('error');
+    }
+  });
+}
+if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', start, { once: true });
+else start();

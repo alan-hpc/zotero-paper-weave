@@ -1,6 +1,7 @@
-import { PDFDocument, PDFEmbeddedPage, PDFFont, PDFPage, rgb, StandardFonts } from 'pdf-lib';
+import { PDFDocument, PDFEmbeddedPage, PDFImage, PDFFont, PDFPage, rgb, StandardFonts } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import { Block, Project, canTranslate } from './model';
+import { Run, styledRuns, wrapStyled } from './typography';
 
 /** Design B: the divider partitions the usable page width at exactly 60/40. */
 export const LAYOUT = {
@@ -19,8 +20,9 @@ export interface Placement {
   english: { x: number; width: number; height: number };
   chinese: { x: number; width: number; height: number };
 }
-interface Snippet { sourcePage: number; box: { left: number; bottom: number; right: number; top: number }; width: number; height: number; embedded?: PDFEmbeddedPage }
-interface Plan { block: Block; en: string[]; zh: string[]; snippets: Snippet[]; enSize: number; zhSize: number; enLead: number; zhLead: number; enFont: PDFFont }
+interface Snippet { sourcePage: number; box: { left: number; bottom: number; right: number; top: number }; width: number; height: number; embedded?: PDFEmbeddedPage; image?:PDFImage }
+interface Plan { block: Block; en: string[]; zh: Run[][]; snippets: Snippet[]; enSize: number; zhSize: number; enLead: number; zhLead: number; enFont: PDFFont }
+export interface RenderOptions { monoFontBytes?:Uint8Array; rasterize?:(pageIndex:number,box:Snippet['box'])=>Promise<Uint8Array> }
 
 export function wrap(text: string, font: PDFFont, size: number, width: number): string[] {
   const output: string[] = [];
@@ -61,19 +63,19 @@ function needsSourceTypography(block: Block, supported: Set<number>) {
   return [...block.source.normalize('NFKC')].some(c => !/[\n\r\t]/.test(c) && !supported.has(c.codePointAt(0)!));
 }
 
-/** B layout. Reflow prose; preserve math, figures, captions and tables as original vector snippets. */
+/** B layout. Reflow prose and retain protected original regions without translating them. */
 export async function render(project: Project, sourceBytes: Uint8Array, fontBytes: Uint8Array,
   appendix: boolean, signal: AbortSignal, progress: (s: string) => void,
-  onPlacement?: (placement: Placement) => void): Promise<Uint8Array> {
+  onPlacement?: (placement: Placement) => void, options: RenderOptions = {}): Promise<Uint8Array> {
   const incomplete = project.blocks.filter(b => canTranslate(b) && !b.translation.trim());
   if (incomplete.length) throw new Error(`还有 ${incomplete.length} 段未翻译。请完成翻译，或将这些段落设为「保留英文」。`);
   signal.throwIfAborted();
   const source = await PDFDocument.load(sourceBytes);
   if (source.getPageCount() !== project.pages.length) throw new Error('原 PDF 页数与缓存不匹配。');
   const doc = await PDFDocument.create(); doc.registerFontkit(fontkit);
-  // pdf-lib/fontkit's TrueType subset drops visible glyphs with this CJK font.
-  // Embed the complete OFL font so every saved revision renders consistently.
+  // Bundle static TrueType fonts whole; fontkit's subset path drops CJK glyphs.
   const zhFont = await doc.embedFont(fontBytes, { subset: false });
+  const monoFont = options.monoFontBytes ? await doc.embedFont(options.monoFontBytes,{subset:false,features:{liga:false,clig:false,calt:false}}) : zhFont;
   const english = await doc.embedFont(StandardFonts.TimesRoman);
   const englishBold = await doc.embedFont(StandardFonts.TimesRomanBold);
   const labelFont = await doc.embedFont(StandardFonts.Helvetica);
@@ -89,13 +91,17 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
     const p: Plan = { block, en: [], zh: [], snippets: [], enSize: heading ? 12 : 11.1,
       zhSize: heading ? 11.2 : 10.7, enLead: heading ? 16.4 : LEAD_EN, zhLead: heading ? 16.4 : LEAD_ZH,
       enFont: heading ? englishBold : english };
-    if (canTranslate(block)) p.zh = wrap(block.translation, zhFont, p.zhSize, ZW);
+    if (canTranslate(block)) p.zh = wrapStyled(styledRuns(block.translation,project.terms.map(t=>t.source)),zhFont,monoFont,p.zhSize,ZW);
     if (!needsSourceTypography(block,enChars)) {
       p.en = wrap(block.source.normalize('NFKC'),p.enFont,p.enSize,EW);
     } else {
       for (const r of block.rects) {
         const crop = source.getPage(r[0]).getCropBox();
-        const left = Math.max(crop.x,r[1]-1), right = Math.min(crop.x+crop.width,r[3]+1);
+        const left = Math.max(crop.x,r[1]-1);
+        // SDT can underestimate the width of full-width small-cap headings.
+        // A symmetric page margin is safe here: a block this wide has no adjacent text column.
+        const wideRight = r[3]-r[1] > crop.width*.7 ? crop.x+crop.width-Math.max(0,left-crop.x-4) : r[3]+1;
+        const right = Math.min(crop.x+crop.width,Math.max(r[3]+1,wideRight));
         const bottom = Math.max(crop.y,r[2]-1), top = Math.min(crop.y+crop.height,r[4]+1);
         if (right <= left || top <= bottom) throw new Error(`${block.id} 的裁剪坐标超出原 PDF。`);
         const scale = Math.min(1.35, EW/(right-left), (USABLE-8)/(top-bottom));
@@ -106,7 +112,13 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
     plans.push(p);
   }
   const snippets = plans.flatMap(p=>p.snippets);
-  if (snippets.length) {
+  if (snippets.length && options.rasterize) {
+    for(const [i,snippet] of snippets.entries()) {
+      signal.throwIfAborted();progress(`保留原文区域 ${i+1}/${snippets.length}`);
+      // Host callbacks return typed arrays from a different privileged compartment.
+      snippet.image=await doc.embedPng(new Uint8Array(await options.rasterize(snippet.sourcePage,snippet.box)));
+    }
+  } else if (snippets.length) {
     const embedded = await doc.embedPages(snippets.map(s=>source.getPage(s.sourcePage)),snippets.map(s=>s.box));
     snippets.forEach((s,i)=>s.embedded=embedded[i]);
   }
@@ -145,11 +157,15 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
       while(s+sourceCount<p.snippets.length && sourceHeight+(sourceCount?6:0)+p.snippets[s+sourceCount].height<=available) {
         const snippet=p.snippets[s+sourceCount];
         if(sourceCount) sourceHeight+=6;
-        page!.drawPage(snippet.embedded!,{x:EX,y:top-sourceHeight-snippet.height,width:snippet.width,height:snippet.height});
+        const placement={x:EX,y:top-sourceHeight-snippet.height,width:snippet.width,height:snippet.height};
+        if(snippet.image)page!.drawImage(snippet.image,placement);else page!.drawPage(snippet.embedded!,placement);
         sourceHeight+=snippet.height; sourceCount++;
       }
       for(let n=0;n<enCount;n++) if(p.en[e+n]) page!.drawText(p.en[e+n],{x:EX,y:top-p.enSize-n*p.enLead,font:p.enFont,size:p.enSize,color:ink});
-      for(let n=0;n<zhCount;n++) if(p.zh[z+n]) page!.drawText(p.zh[z+n],{x:ZX,y:top-p.zhSize-n*p.zhLead,font:zhFont,size:p.zhSize,color:blue});
+      for(let n=0;n<zhCount;n++) {
+        let x=ZX;
+        for(const run of p.zh[z+n]) {const font=run.mono?monoFont:zhFont;page!.drawText(run.text,{x,y:top-p.zhSize-n*p.zhLead,font,size:p.zhSize,color:blue});x+=font.widthOfTextAtSize(run.text,p.zhSize);}
+      }
       if (!enCount && !zhCount && !sourceCount) throw new Error(`${p.block.id} 无法分页。`);
       const enHeight=Math.max(enCount*p.enLead,sourceHeight),zhHeight=zhCount*p.zhLead;
       if (p.block.kind !== 'heading') {

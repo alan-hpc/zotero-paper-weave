@@ -2,6 +2,8 @@ import { Project, Settings, now, validateProject } from './model';
 import { extractProject } from './extract';
 import { endpoint } from './provider';
 import { PreferredAttachments } from './preferred';
+import { readAsset } from './assets';
+import { snippetRenderer } from './snippets';
 
 let meta: { id: string; version: string; rootURI: string };
 const menus = new Map<any, { nodes: any[]; popup: any; listener: any }>();
@@ -106,7 +108,11 @@ export async function loadProject(item: any, progress: (s: string) => void, sign
   if (!path || !await IOUtils.exists(path)) throw new Error('PDF 尚未下载，请先在 Zotero 打开原始附件。');
   const hash = await item.attachmentHash;
   const existing = await readJSON(projectPath(item, hash));
-  if (existing) { validateProject(existing); existing.pluginVersion = meta.version; return existing; }
+  if (existing) {
+    validateProject(existing); existing.pluginVersion = meta.version;
+    existing.source.title = item.parentItem?.getField('title') || item.getField('title') || existing.source.title;
+    return existing;
+  }
   const project = await extractProject(Zotero, item, meta.version, progress, signal);
   await saveProject(project);
   return project;
@@ -116,9 +122,10 @@ export async function sourceBytes(item: any, project: Project) {
   return IOUtils.read(await item.getFilePathAsync());
 }
 export async function fontBytes() {
-  const request = await Zotero.HTTP.request('GET', meta.rootURI + 'chrome/content/fonts/NotoSansSC.ttf', { responseType: 'arraybuffer' });
-  return new Uint8Array(request.response);
+  return readAsset(Zotero.getMainWindow().XMLHttpRequest, meta.rootURI + 'chrome/content/fonts/NotoSerifSC-Regular.ttf');
 }
+export async function monoFontBytes() { return readAsset(Zotero.getMainWindow().XMLHttpRequest, meta.rootURI + 'chrome/content/fonts/SarasaMonoSC-Regular.ttf'); }
+export async function sourceRenderer(item: any) { return snippetRenderer(Zotero,item,Cu); }
 export function preferBilingual() { return Zotero.Prefs.get(pref + 'preferBilingual', true) !== false; }
 export async function preferOriginal(item: any) {
   if (!item.parentID) throw new Error('独立 PDF 没有父论文条目；请直接打开原文附件。');
@@ -228,7 +235,7 @@ async function open(window: any, itemID?: number) {
     const key = `${item.libraryID}:${item.key}`;
     if (windows.get(key) && !windows.get(key).closed) { windows.get(key).focus(); return; }
     const bridge = { item, meta, settings, hasKey, apiKey, saveSettings, importHJFYSettings, loadProject, saveProject,
-      sourceBytes, fontBytes, attachPDF, preferBilingual, preferOriginal, exportProject, importProject, acquire };
+      sourceBytes, fontBytes, monoFontBytes, sourceRenderer, attachPDF, preferBilingual, preferOriginal, exportProject, importProject, acquire };
     const w = window.openDialog('chrome://paperweave/content/workbench.xhtml', '',
       'chrome,resizable,centerscreen,width=1140,height=840', bridge);
     windows.set(key, w);

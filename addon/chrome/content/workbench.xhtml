@@ -5,7 +5,6 @@
   <title>PaperWeave · 论文织译</title>
   <meta charset="utf-8" />
   <link rel="stylesheet" href="workbench.css" />
-  <script src="workbench.js" defer="defer"></script>
 </head>
 <body>
   <header><img src="icon.svg" width="38" height="38" alt="" />
@@ -27,6 +26,7 @@
     <button id="generate">保存新版 PDF（本地重排）</button><button id="cancel" disabled="disabled">取消</button>
   </nav>
   <p class="hint">排版 B · 英文左侧 60% / 中文右侧 40% · 段落对齐 · 中间竖线</p>
+  <p class="hint">字体：英文 Times · 中文思源宋体 · 本文术语与行内代码使用更纱等宽字体</p>
   <p id="project-summary" class="hint">尚未载入翻译项目</p>
   <details><summary>分步操作：词表与翻译</summary><div class="row"><button id="terms-action">识别本文术语</button><button id="translate">仅翻译未完成段落</button></div><p class="hint">也可以先复核词表再翻译。「翻译并生成 PDF」会自动识别术语、翻译剩余段落并导入附件；已有译文会保留。</p></details>
   <p class="notice">版面识别可能有误。请复核正文与图表分类；图表、图注、表格、公式、代码及参考文献默认保留原文。扫描件需先 OCR。</p>
@@ -48,4 +48,5 @@
     <p class="hint">项目自动保存在本机 Zotero 数据目录，默认不随 Zotero 同步。每次生成新 PDF 附件；旧版批注不会自动迁移。</p>
     <p class="hint">优先打开选择保存在本机，重启后保留；停用插件后使用 Zotero 默认顺序。原文附件始终保留。</p>
   </footer>
+  <script src="workbench.js"></script>
 </body></html>

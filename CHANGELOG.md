@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.0-alpha.6
+
+- Embedded serif Chinese body text with glossary/inline-code monospace runs.
+- Render protected regions with the host PDF.js to avoid hidden clipped text in the output text layer.
+- Handle privileged reader compartments and cross-realm PNG data.
+- Validate two live DeepSeek paragraphs, local revisions and preferred attachment selection on macOS / Zotero 10.0.7.
+
+### Internal alpha.3 runtime fixes
+
+- Fix workbench initialization in privileged XHTML: wait for DOMContentLoaded and load the script after the interface.
+- Show initialization errors in the status area and expose a readiness promise for diagnostics.
+- Add regression coverage for early script execution, settings and project loading.
+- Use the parent paper title for newly extracted projects.
+- Read packaged fonts directly from their local resource channel.
+- Extend wide protected snippets to avoid clipping underestimated small-cap title bounds.
+
 ## 0.1.0-alpha.2
 
 - Default design B: English 60%, Chinese 40%, vertical divider and paragraph alignment.

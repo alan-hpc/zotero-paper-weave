@@ -31,8 +31,10 @@ transient HTTP errors. API bodies are not copied to user errors. Paper text is l
 data. Model JSON and terminology placeholders are checked before saving.
 
 `render.ts` reflows ordinary English prose and aligns each paragraph with Chinese in a 60/40
-landscape layout. English with mathematical or unsupported typography uses original PDF snippets.
-Chinese uses a complete embedded OFL font to avoid TrueType subsetting glyph loss. Protected blocks are
+landscape layout. English with mathematical or unsupported typography uses high-resolution original PDF snippets.
+Chinese uses a complete embedded static TrueType Noto Serif derivative and glossary/code runs use an embedded Sarasa Mono derivative.
+`snippets.ts` adapts Zotero's PDF.js reader to render protected regions without copying hidden source text.
+It clones parameters into the reader compartment and copies returned binary data into the workbench compartment. Protected blocks are
 embedded once without translation. An optional full-source appendix guards against extraction
 omissions. It does not preserve source annotations in clipped snippets.
 
@@ -79,9 +81,9 @@ on old attachments. Automatic migration of annotation positions is outside this 
 
 ## Current engineering limits
 
-No in-app runtime validation has been performed for this release. Host API availability, privileged
-window loading, clipped-vector text selection, library permissions, cancellation during extraction,
-and generated PDF layout need real Zotero validation before a stable release. The development
+A two-paragraph DeepSeek workflow, local manual revisions and preferred attachments were exercised
+on macOS / Zotero 10.0.7. Full-paper segmentation, other operating systems, error recovery and
+other host versions need broader validation before a stable release. The development
 workflow runs type checking, offline smoke checks and packaging. The smoke suite covers bootstrap
 globals, preference lifecycle and layout geometry/pagination/manual revisions. It does not replace
 real Zotero installation, SDT, credential and model testing.

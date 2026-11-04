@@ -4,12 +4,12 @@ var controller;
 async function startup({ id, version, rootURI }) {
   await Zotero.initializationPromise;
   // Zotero supplies IOUtils and PathUtils to the bootstrap sandbox.
-  const { classes: Cc, interfaces: Ci } = Components;
+  const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
   chromeHandle = Cc["@mozilla.org/addons/addon-manager-startup;1"]
     .getService(Ci.amIAddonManagerStartup)
     .registerChrome(Services.io.newURI(rootURI + "manifest.json"),
       [["content", "paperweave", "chrome/content/"]]);
-  const scope = { Zotero, Services, Cc, Ci, ChromeUtils, IOUtils, PathUtils, URL };
+  const scope = { Zotero, Services, Cc, Ci, Cu, ChromeUtils, IOUtils, PathUtils, URL };
   Services.scriptloader.loadSubScript(rootURI + "controller.js", scope);
   controller = scope.PaperWeaveController;
   controller.start({ id, version, rootURI });
