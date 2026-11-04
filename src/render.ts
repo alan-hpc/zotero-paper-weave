@@ -76,8 +76,8 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
   // Bundle static TrueType fonts whole; fontkit's subset path drops CJK glyphs.
   const zhFont = await doc.embedFont(fontBytes, { subset: false });
   const monoFont = options.monoFontBytes ? await doc.embedFont(options.monoFontBytes,{subset:false,features:{liga:false,clig:false,calt:false}}) : zhFont;
-  const english = await doc.embedFont(StandardFonts.TimesRoman);
-  const englishBold = await doc.embedFont(StandardFonts.TimesRomanBold);
+  // Use the same embedded Latin serif glyphs in English prose and Chinese translations.
+  const english = zhFont;
   const labelFont = await doc.embedFont(StandardFonts.Helvetica);
   const zhChars = new Set(zhFont.getCharacterSet()), enChars = new Set(english.getCharacterSet());
   const plans: Plan[] = [];
@@ -90,8 +90,8 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
     const heading = block.kind === 'heading';
     const p: Plan = { block, en: [], zh: [], snippets: [], enSize: heading ? 12 : 11.1,
       zhSize: heading ? 11.2 : 10.7, enLead: heading ? 16.4 : LEAD_EN, zhLead: heading ? 16.4 : LEAD_ZH,
-      enFont: heading ? englishBold : english };
-    if (canTranslate(block)) p.zh = wrapStyled(styledRuns(block.translation,project.terms.map(t=>t.source)),zhFont,monoFont,p.zhSize,ZW);
+      enFont: english };
+    if (canTranslate(block)) p.zh = wrapStyled(styledRuns(block.translation),zhFont,monoFont,p.zhSize,ZW);
     if (!needsSourceTypography(block,enChars)) {
       p.en = wrap(block.source.normalize('NFKC'),p.enFont,p.enSize,EW);
     } else {

@@ -68,13 +68,20 @@ try {
   await assert.rejects(readAsset(BrokenAsset,'jar:file:///addon.xpi!/font.ttf'),/字体加载失败/);
   console.log('PASS packaged binary resource reading for jar URI');
   const {styledRuns,wrapStyled}=await moduleFor('src/typography.ts');
-  const mixed=styledRuns('kernel 与 kernels，以及 `x = 1`。',['kernel']);
-  assert.deepEqual(mixed.filter(r=>r.mono).map(r=>r.text),['kernel','x = 1']);
+  const mixed=styledRuns('GPU、kernel 与 kernels，以及 `x = 1`。');
+  assert.deepEqual(mixed.filter(r=>r.mono).map(r=>r.text),['x = 1']);
+  assert.ok(mixed.some(r=>!r.mono&&r.text.includes('GPU、kernel')));
   const fakeFont={widthOfTextAtSize:(s,size)=>s.length*size/2};
   const wrapped=wrapStyled(mixed,fakeFont,fakeFont,10,70);
   assert.ok(wrapped.every(line=>line.reduce((n,r)=>n+fakeFont.widthOfTextAtSize(r.text,10),0)<=70));
-  assert.ok(wrapped.flat().some(r=>r.mono&&r.text.includes('kernel')));
-  console.log('PASS serif/monospace terminology and inline-code runs');
+  assert.ok(wrapped.flat().some(r=>r.mono&&r.text.includes('x = 1')));
+  assert.equal(wrapped.flat().filter(r=>r.mono).map(r=>r.text).join(''),'x = 1');
+  const punctuation=wrapStyled(styledRuns('一二三四。五六七八，九十。'),fakeFont,fakeFont,10,20);
+  assert.ok(punctuation.every(line=>! /^[，。；：？！]/.test(line[0]?.text||'')));
+  const percent=wrapStyled(styledRuns('一二三四5.30%。五六七八。'),fakeFont,fakeFont,10,50);
+  assert.ok(percent.every(line=>! /^[%％，。；：？！]/.test(line[0]?.text||'')));
+  assert.ok(percent.some(line=>line.map(r=>r.text).join('').includes('5.30%')));
+  console.log('PASS serif prose/terminology and monospace inline-code runs');
 
   // Privileged XHTML does not reliably defer a classic script in the document head.
   const markup=await readFile('addon/chrome/content/workbench.xhtml','utf8');

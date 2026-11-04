@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-alpha.8
+
+- Use the same embedded serif face for English prose, Chinese translations and English technical terms.
+- Reserve monospace for explicit inline code; per-paper terminology protection is unchanged.
+- Keep Chinese closing punctuation with the preceding word when wrapping translated prose.
+- Check the new typography using cached two-paragraph translations without additional model calls.
+
 ## 0.1.0-alpha.6
 
 - Embedded serif Chinese body text with glossary/inline-code monospace runs.
