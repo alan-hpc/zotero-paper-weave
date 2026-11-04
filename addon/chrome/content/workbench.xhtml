@@ -25,12 +25,16 @@
     <button id="start" class="primary">翻译并生成 PDF</button>
     <button id="generate">保存新版 PDF（本地重排）</button><button id="cancel" disabled="disabled">取消</button>
   </nav>
+  <section id="task-progress" data-busy="false" aria-label="任务进度">
+    <div id="status" role="status" aria-live="polite">准备中…</div>
+    <div class="progress-track"><span id="progress-detail"></span><progress id="job-progress" max="1" value="0" aria-label="当前阶段进度"></progress></div>
+    <div class="progress-meta"><span id="request-detail"></span><span id="progress-time"></span></div>
+  </section>
   <p class="hint">排版 B · 英文左侧 60% / 中文右侧 40% · 正文两端对齐，段末左对齐 · 中间竖线</p>
   <p class="hint">字体：中英文正文与英文术语统一使用思源宋体字库 · 仅行内代码使用更纱等宽字体</p>
   <p id="project-summary" class="hint">尚未载入翻译项目</p>
   <details><summary>分步操作：词表与翻译</summary><div class="row"><button id="terms-action">识别本文术语</button><button id="translate">仅翻译未完成段落</button></div><p class="hint">也可以先复核词表再翻译。「翻译并生成 PDF」会自动识别术语、翻译剩余段落并导入附件；已有译文会保留。</p></details>
   <p class="notice">版面识别可能有误。请复核正文与图表分类；图表、图注、表格、公式、代码及参考文献默认保留原文。扫描件需先 OCR。</p>
-  <div id="status" role="status" aria-live="polite">准备中…</div>
   <main>
     <aside><div class="list-heading"><strong>段落</strong><select id="filter" aria-label="筛选段落"><option value="all">全部</option><option value="pending">未翻译</option><option value="editable">正文 / 标题</option><option value="keep">保留英文</option></select></div><div id="block-list"></div></aside>
     <section class="editor">

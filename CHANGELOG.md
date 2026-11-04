@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-alpha.10
+
+- Move task status next to the primary actions in a sticky progress panel.
+- Show completed terminology batches, translated paragraphs, rendering stages and elapsed time.
+- Show model response waiting time, the 120-second request limit and HTTP retry countdowns.
+- Check progress updates, retry callbacks and busy-state cleanup with mock responses; no additional model requests are needed.
+
 ## 0.1.0-alpha.9
 
 - Justify English and Chinese body paragraphs while keeping paragraph endings left aligned, including explicit breaks and page continuations.

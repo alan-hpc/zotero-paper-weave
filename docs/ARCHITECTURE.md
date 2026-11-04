@@ -29,6 +29,7 @@ explicitly. This API requires Zotero 10 and must be revisited if host versions c
 no redirects, 120-second request timeout, cancel support, and bounded retries for rate limits and
 transient HTTP errors. API bodies are not copied to user errors. Paper text is labeled as untrusted
 data. Model JSON and terminology placeholders are checked before saving.
+The provider emits request waiting/retry states without response bodies or credentials. The workbench keeps a one-second display timer and shows per-stage completed counts in a sticky panel; the timer is cleared when the job finishes or the window unloads.
 
 `render.ts` reflows ordinary English prose and aligns each paragraph with Chinese in a 60/40
 landscape layout. English with mathematical or unsupported typography uses high-resolution original PDF snippets.

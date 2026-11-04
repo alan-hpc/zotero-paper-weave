@@ -1,6 +1,7 @@
 import { Block, Kind, Project, Settings, canTranslate } from './model';
-import { Provider, endpoint, recordTranslation } from './provider';
+import { Provider, RequestProgress, endpoint, recordTranslation } from './provider';
 import { render } from './render';
+import { formatDuration, requestProgressText } from './progress';
 
 async function initialize() {
 const host = (window as any).arguments[0];
@@ -15,8 +16,24 @@ let revision = 0;
 let saving = Promise.resolve();
 let abort: AbortController | undefined;
 let autosave: ReturnType<typeof setTimeout> | undefined;
+let progressTimer: ReturnType<typeof setInterval> | undefined;
+let started=0,requestStarted=0;
+let requestState:RequestProgress|null=null;
 const actions = ['start','terms-action','translate','generate','retranslate','import','export','save-edit','save-terms','save-settings','delete-key','import-settings','prefer-original'];
 const status = (s: string, error = false) => { $('status').textContent = s; $('status').classList.toggle('error', error); };
+function tickProgress() {
+  $('progress-time').textContent=`本次任务用时 ${formatDuration(Date.now()-started)}`;
+  $('request-detail').textContent=requestProgressText(requestState,Date.now()-requestStarted);
+}
+function phase(label:string,completed?:number,total?:number,unit='') {
+  const meter=$<HTMLProgressElement>('job-progress');
+  if(total!==undefined && total>0){meter.max=total;meter.value=Math.min(completed||0,total);}
+  else meter.removeAttribute('value');
+  $('progress-detail').textContent=total!==undefined&&total>0?`${label} · 已完成 ${completed||0}/${total} ${unit}`:label;
+}
+const termProgress=(message:string,completed:number,total:number)=>{
+  phase('识别术语',completed,total,'批');status(message);
+};
 function showSettings() {
   const s: Settings = host.settings();
   input('base').value = s.baseURL; input('model').value = s.model; area('prompt').value = s.prompt;
@@ -31,6 +48,7 @@ async function persistSettings(remove = false) {
   return settings;
 }
 async function provider(signal: AbortSignal) {
+  phase('准备模型设置');status('正在检查模型设置…');
   const settings = await persistSettings();
   const url = new URL(endpoint(settings.baseURL));
   const key = host.apiKey(settings.baseURL);
@@ -38,7 +56,7 @@ async function provider(signal: AbortSignal) {
     ($('settings-panel') as HTMLDetailsElement).open = true;
     throw new Error('请先填写当前模型端点的 API Key。');
   }
-  return { client: new Provider(settings, key, signal), settings };
+  return { client: new Provider(settings, key, signal,request=>{requestState=request;requestStarted=Date.now();tickProgress();}), settings };
 }
 const labels: Record<Kind,string> = { body:'正文', heading:'标题', figure:'图', caption:'图注 / 表注', table:'表格', math:'公式', code:'代码', reference:'参考文献', keep:'保留英文' };
 function updateControls() {
@@ -103,6 +121,9 @@ function changed() {
 async function run(job: (signal: AbortSignal) => Promise<void>) {
   if (busy) return;
   busy = true; abort = new AbortController();
+  started=Date.now();requestState=null;phase('准备任务');status('正在准备任务…');
+  $('task-progress').setAttribute('data-busy','true');tickProgress();
+  progressTimer=setInterval(tickProgress,1000);
   updateControls();
   let release: (() => void) | undefined;
   try {
@@ -111,7 +132,11 @@ async function run(job: (signal: AbortSignal) => Promise<void>) {
     await job(abort.signal);
   } catch (e: any) {
     status(e.name === 'AbortError' ? '已取消。已完成段落已保存，可继续翻译。' : e.message || '操作失败。', e.name !== 'AbortError');
-  } finally { release?.(); busy = false; abort = undefined; refresh(); }
+  } finally {
+    release?.();busy=false;abort=undefined;requestState=null;
+    clearInterval(progressTimer);progressTimer=undefined;tickProgress();
+    $('task-progress').setAttribute('data-busy','false');refresh();
+  }
 }
 function bind(id: string, fn: () => void | Promise<void>) {
   $(id).addEventListener('click', () => { Promise.resolve().then(fn).catch(e => status(e.message,true)); });
@@ -126,7 +151,7 @@ bind('save-edit', async () => { await save(); status('修订已保存；点击�
 bind('cancel', () => { abort?.abort(); status('正在取消；本地结构分析可能需要等待当前步骤结束…'); });
 bind('terms-action', () => run(async signal => {
   const { client } = await provider(signal);
-  project!.terms = await client.terms(project!.blocks, status);
+  project!.terms = await client.terms(project!.blocks, termProgress);
   project!.terminologyReady = true;
   await save(); status(`已识别 ${project!.terms.length} 个本文术语，可展开词表修改。`);
   ($('terms-panel') as HTMLDetailsElement).open = true;
@@ -139,14 +164,17 @@ bind('save-terms', async () => {
 });
 async function translateRemaining(client: Provider, settings: Settings, signal: AbortSignal) {
   if (!project!.terminologyReady) {
-    project!.terms = await client.terms(project!.blocks,status);
+    project!.terms = await client.terms(project!.blocks,termProgress);
     project!.terminologyReady = true; await save();
   }
   const pending = project!.blocks.filter(b => canTranslate(b) && !b.translation.trim());
+  const total=project!.blocks.filter(canTranslate).length;
+  const initial=total-pending.length;
+  phase('逐段翻译',initial,total,'段');
   for (let i = 0; i < pending.length; i++) {
-    signal.throwIfAborted(); status(`翻译 ${i+1}/${pending.length} · ${pending[i].id}`);
+    signal.throwIfAborted();phase('逐段翻译',initial+i,total,'段');status(`正在翻译第 ${initial+i+1}/${total} 段 · ${pending[i].id}`);
     recordTranslation(pending[i], await client.translate(pending[i],project!),settings);
-    await save(); list();
+    await save();list();phase('逐段翻译',initial+i+1,total,'段');
   }
   status(pending.length ? `翻译完成，共 ${pending.length} 段。可逐段修订，或生成 PDF。` : '所有正文段落均已有译文。');
 }
@@ -158,18 +186,25 @@ bind('retranslate', () => run(async signal => {
   if (!selected || !canTranslate(selected)) return;
   const { client, settings } = await provider(signal);
   status(`正在重新翻译 ${selected.id}…`);
+  phase('重新翻译所选段落',0,1,'段');
   recordTranslation(selected, await client.translate(selected,project!),settings);
   await save(); status('本段已重新翻译并保存。');
 }));
 async function generatePDF(signal: AbortSignal) {
+  phase('准备 PDF 排版');
   status('正在准备 PDF 排版…');
   const bytes = await host.sourceBytes(host.item,project);
   const font = await host.fontBytes();
   const monoFont = await host.monoFontBytes();
   const rasterize = await host.sourceRenderer(host.item);
-  const output = await render(project!, new Uint8Array(bytes), new Uint8Array(font), input('appendix').checked, signal,status,
+  const output = await render(project!, new Uint8Array(bytes), new Uint8Array(font), input('appendix').checked, signal,message=>{
+    const step=message.match(/^(保留原文区域|60\/40 逐段排版) (\d+)\/(\d+)$/);
+    if(step)phase(step[1],Number(step[2])-1,Number(step[3]),'个');else phase('写入 PDF');
+    status(message);
+  },
     undefined,{monoFontBytes:new Uint8Array(monoFont),rasterize});
   signal.throwIfAborted();
+  phase('保存 Zotero 附件');status('PDF 排版完成，正在保存并打开附件…');
   const result = await host.attachPDF(host.item,project,output,input('make-preferred').checked);
   status(result.preferenceError ? `双语 PDF 已生成。优先打开未生效：${result.preferenceError}` :
     result.preferredSet ? '已生成 60/40 双语 PDF，并设为这篇论文优先打开的附件。' : '已生成 60/40 双语 PDF，并在 Zotero 中打开。');
@@ -193,7 +228,7 @@ input('base').addEventListener('change', () => {
 window.addEventListener('beforeunload', event => {
   if (busy || dirty) { event.preventDefault(); event.returnValue = ''; }
 });
-window.addEventListener('unload', () => { abort?.abort(); clearTimeout(autosave); if (dirty) void save().catch(() => {}); });
+window.addEventListener('unload', () => { abort?.abort(); clearTimeout(autosave);clearInterval(progressTimer); if (dirty) void save().catch(() => {}); });
 (window as any).paperWeaveBeforeShutdown = async () => {
   abort?.abort();
   await save();
@@ -203,6 +238,7 @@ window.addEventListener('unload', () => { abort?.abort(); clearTimeout(autosave)
   input('make-preferred').checked = host.preferBilingual();
   $('paper-title').textContent = host.item.getField('title');
   await run(async signal => {
+    phase('读取 PDF 项目');status('正在读取论文项目…');
     project = await host.loadProject(host.item,status,signal);
     status(`已载入 ${project!.blocks.length} 个区域；请先复核分类。`);
     if (project!.pages.some(p => p.extractionDegraded)) status('部分页面的版面分析已降级，请与原文逐页复核，并保留原文附录。');

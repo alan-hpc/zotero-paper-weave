@@ -99,22 +99,65 @@ try {
   assert.equal(oneWord.at(-1).x+oneWord.at(-1).width,15,'single Latin word is not stretched');
   console.log('PASS English/CJK justification, punctuation, code spacing and paragraph endings');
 
+  const {formatDuration,requestProgressText}=await moduleFor('src/progress.ts');
+  assert.equal(formatDuration(65000),'1 分 5 秒');
+  assert.equal(requestProgressText(null,1000),'');
+  assert.match(requestProgressText({phase:'waiting',attempt:1,maxAttempts:3},2000),/等待模型响应 2 秒.*120 秒/);
+  assert.match(requestProgressText({phase:'retry',attempt:2,maxAttempts:3,httpStatus:429,retryAfterMS:3000},1000),/HTTP 429 · 2 秒后重试/);
+  const {Provider}=await moduleFor('src/provider.ts');
+  const originalFetch=globalThis.fetch,requestEvents=[];let modelRequests=0;
+  try{
+    globalThis.fetch=async()=>{
+      modelRequests++;
+      return modelRequests===1?{ok:false,status:429,headers:{get:()=>'.001'},body:{cancel:async()=>{}}}
+        :{ok:true,json:async()=>({choices:[{message:{content:'{"translation":"测试译文"}'}}]})};
+    };
+    const provider=new Provider({baseURL:'https://example.test/v1',model:'mock',prompt:''},'',new AbortController().signal,r=>requestEvents.push(r?.phase||'idle'));
+    assert.deepEqual(await provider.json('test',{}),{translation:'测试译文'});
+    assert.deepEqual(requestEvents,['waiting','retry','idle','waiting','idle']);
+    provider.json=async()=>({terms:[]});
+    const termStages=[];
+    await provider.terms([{kind:'body',source:'a'.repeat(20000)}],(message,completed,total)=>termStages.push([completed,total]));
+    assert.deepEqual(termStages,[[0,2],[1,2],[1,2],[2,2]]);
+    const failureEvents=[];
+    globalThis.fetch=async()=>({ok:false,status:401});
+    const failing=new Provider({baseURL:'https://example.test/v1',model:'mock',prompt:''},'',new AbortController().signal,r=>failureEvents.push(r?.phase||'idle'));
+    await assert.rejects(failing.json('test',{}),/HTTP 401/);
+    assert.deepEqual(failureEvents,['waiting','idle'],'request indicator clears after failure');
+    const cancellation=new AbortController(),cancelEvents=[];
+    globalThis.fetch=async(_url,options)=>new Promise((_resolve,reject)=>options.signal.addEventListener('abort',()=>reject(new DOMException('cancelled','AbortError')),{once:true}));
+    const cancelling=new Provider({baseURL:'https://example.test/v1',model:'mock',prompt:''},'',cancellation.signal,r=>cancelEvents.push(r?.phase||'idle'));
+    const pending=cancelling.json('test',{});cancellation.abort();
+    await assert.rejects(pending,{name:'AbortError'});
+    assert.deepEqual(cancelEvents,['waiting','idle'],'request indicator clears after cancellation');
+  }finally{globalThis.fetch=originalFetch;}
+  console.log('PASS model waiting/retry progress and completed terminology batches using mock responses');
+
   // Privileged XHTML does not reliably defer a classic script in the document head.
   const markup=await readFile('addon/chrome/content/workbench.xhtml','utf8');
   assert.ok(markup.indexOf('<script src="workbench.js"')>markup.indexOf('</footer>'));
+  assert.ok(markup.indexOf('id="task-progress"')<markup.indexOf('id="project-summary"'),'progress stays near primary actions');
   const uiBundle=await build({entryPoints:['src/workbench.ts'],bundle:true,write:false,format:'iife',target:'firefox128'});
-  const elements=new Map([...markup.matchAll(/\bid="([^"]+)"/g)].map(m=>[m[1],{value:'',textContent:'',checked:false,disabled:false,open:false,
+  const elements=new Map([...markup.matchAll(/\bid="([^"]+)"/g)].map(m=>[m[1],{value:'',textContent:'',checked:false,disabled:false,open:false,attributes:new Map(),
+    setAttribute(key,value){this.attributes.set(key,value);},removeAttribute(key){this.attributes.delete(key);},
     classList:{toggle(){},add(){}},addEventListener(){},replaceChildren(){},append(){}}]));
   elements.get('filter').value='all';
   const events=new Map();let queries=0;
   const uiDocument={readyState:'loading',getElementById:id=>{queries++;return elements.get(id)||null;},body:{classList:{toggle(){}}}};
+  let finishProject;
   const bridge={settings:()=>({baseURL:'https://api.deepseek.com/v1',model:'deepseek-flash',prompt:''}),hasKey:()=>false,preferBilingual:()=>true,
-    item:{getField:()=> 'Synthetic startup check'},acquire:()=>()=>{},loadProject:async()=>({blocks:[],pages:[],terms:[],source:{}})};
+    item:{getField:()=> 'Synthetic startup check'},acquire:()=>()=>{},loadProject:()=>new Promise(resolve=>{finishProject=resolve;})};
   const uiWindow={arguments:[bridge],addEventListener:(name,fn)=>events.set(name,fn)};
-  const uiContext=vm.createContext({window:uiWindow,document:uiDocument,setTimeout,clearTimeout,AbortController,TextEncoder,TextDecoder,URL,console});
+  const uiContext=vm.createContext({window:uiWindow,document:uiDocument,setTimeout,clearTimeout,setInterval,clearInterval,AbortController,TextEncoder,TextDecoder,URL,console});
   vm.runInContext(uiBundle.outputFiles[0].text,uiContext);
   assert.equal(queries,0,'no DOM reads before DOMContentLoaded');
-  uiDocument.readyState='complete';events.get('DOMContentLoaded')();await uiWindow.paperWeaveReady;
+  uiDocument.readyState='complete';events.get('DOMContentLoaded')();
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(elements.get('task-progress').attributes.get('data-busy'),'true');
+  assert.equal(elements.get('progress-detail').textContent,'读取 PDF 项目');
+  assert.match(elements.get('progress-time').textContent,/本次任务用时/);
+  finishProject({blocks:[],pages:[],terms:[],source:{}});await uiWindow.paperWeaveReady;
+  assert.equal(elements.get('task-progress').attributes.get('data-busy'),'false');
   assert.equal(elements.get('paper-title').textContent,'Synthetic startup check');
   assert.equal(elements.get('model').value,'deepseek-flash');
   assert.equal(elements.get('status').textContent,'已载入 0 个区域；请先复核分类。');
