@@ -12,7 +12,7 @@ Source: https://github.com/alan-hpc/zotero-paper-weave
 
 Releases: https://github.com/alan-hpc/zotero-paper-weave/releases
 
-This is **0.1.0-alpha.10**, a development preview. It has passed type checking and offline smoke checks, with a small two-paragraph DeepSeek/revision/preferred-attachment workflow exercised on macOS / Zotero 10.0.7. Full-paper and cross-platform validation remains limited. Feedback from developers is especially welcome.
+This is **0.1.0-alpha.11**, a development preview. It has passed type checking and offline smoke checks, with a small two-paragraph DeepSeek/revision/preferred-attachment workflow exercised on macOS / Zotero 10.0.7. Full-paper and cross-platform validation remains limited. Feedback from developers is especially welcome.
 It requires Zotero 10's structured-document API. OCR and rotated pages are not supported in this
 first version. Layout classification requires review. New PDFs retain old versions rather than
 migrating their annotations. Local revision projects are not automatically synced.

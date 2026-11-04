@@ -55,7 +55,22 @@ try {
   vm.createContext(sandbox);vm.runInContext(await readFile('addon/bootstrap.js','utf8'),sandbox);
   await sandbox.startup({id:'paperweave@test',version:'test',rootURI:'file:///addon/'});await sandbox.shutdown();
   assert.deepEqual(lifecycle,['start','attach','stop','destruct']);
+  await sandbox.startup({id:'paperweave@test',version:'test',rootURI:'file:///addon/'});
+  sandbox.controller.stop=async()=>{throw new Error('destroyed window');};
+  await assert.rejects(sandbox.shutdown(),/destroyed window/);
+  assert.equal(lifecycle.at(-1),'destruct','chrome registration released even if stop fails');
   console.log('PASS bootstrap using Zotero-supplied globals');
+
+  const {start:controllerStart,stop:controllerStop}=await moduleFor('src/controller.ts');
+  const savedHost=globalThis.Zotero;let readerListener,unregistered=false;
+  class ShutdownItem {async getBestAttachments(){return [];}}
+  try{
+    globalThis.Zotero={Item:ShutdownItem,Prefs:{get:()=>undefined},Reader:{registerEventListener:(_name,listener)=>{readerListener=listener;},unregisterEventListener:()=>{unregistered=true;}}};
+    controllerStart({id:'shutdown-test',version:'test',rootURI:'file:///addon/'});
+    readerListener({reader:{itemID:1},doc:{createElement:()=>({style:{},setAttribute(){},addEventListener(){},remove(){throw new Error('dead reader compartment');}})},append(){}});
+    await controllerStop();assert.equal(unregistered,true);
+  }finally{globalThis.Zotero=savedHost;}
+  console.log('PASS add-on shutdown tolerates dead reader DOM objects');
 
   const {readAsset}=await moduleFor('src/assets.ts');
   class AssetRequest {
@@ -67,7 +82,7 @@ try {
   class BrokenAsset extends AssetRequest {send(){this.onerror();}}
   await assert.rejects(readAsset(BrokenAsset,'jar:file:///addon.xpi!/font.ttf'),/字体加载失败/);
   console.log('PASS packaged binary resource reading for jar URI');
-  const {styledRuns,wrapStyled,positionLine}=await moduleFor('src/typography.ts');
+  const {styledRuns,withFontFallback,wrapStyled,positionLine}=await moduleFor('src/typography.ts');
   const mixed=styledRuns('GPU、kernel 与 kernels，以及 `x = 1`。');
   assert.deepEqual(mixed.filter(r=>r.mono).map(r=>r.text),['x = 1']);
   assert.ok(mixed.some(r=>!r.mono&&r.text.includes('GPU、kernel')));
@@ -180,11 +195,17 @@ try {
       block('b4','Table 1. Original caption','','caption',[[0,45,413,300,435]]),
       block('b5','Protected equation: E = mc2','保留原始公式以便核对。','body',[[0,45,353,300,375]]),
       block('b6','A long paragraph must continue without losing any sentence. '.repeat(150),'很长的译文必须连续排版，不能丢失句子，保留 kernel 与 throughput 等术语。'.repeat(120)),
-      block('b7','Final paragraph after continuation.','跨页后的最后一段。')],terms:[],terminologyReady:true,outputs:[],created:'',updated:''};
+      block('b7','Final paragraph after continuation.','跨页后的最后一段，数学符号 ∼、⌈x⌉ 保持原样。')],terms:[],terminologyReady:true,outputs:[],created:'',updated:''};
   const sourceBytes=await doc.save(),fontBytes=new Uint8Array(await readFile('addon/chrome/content/fonts/NotoSerifSC-Regular.ttf'));
   const monoBytes=new Uint8Array(await readFile('addon/chrome/content/fonts/SarasaMonoSC-Regular.ttf'));
   const fontkit=(await import('@pdf-lib/fontkit')).default;
   const fixed=fontkit.create(monoBytes);
+  const serifFace=fontkit.create(fontBytes);
+  const fallback=withFontFallback(styledRuns('GPU 中文 ∼⌈x⌉ 与 `x = 1`。'),new Set(serifFace.characterSet),new Set(fixed.characterSet));
+  assert.equal(fallback.map(r=>r.text).join(''),'GPU 中文 ∼⌈x⌉ 与 x = 1。');
+  assert.ok(fallback.some(r=>!r.mono&&r.text.includes('GPU')));
+  for(const symbol of ['∼','⌈','⌉'])assert.ok(fallback.some(r=>r.mono&&r.text.includes(symbol)));
+  console.log('PASS bundled font fallback preserves missing mathematical symbols');
   assert.equal(fixed.glyphForCodePoint('中'.codePointAt(0)).advanceWidth,2*fixed.glyphForCodePoint('A'.codePointAt(0)).advanceWidth);
   assert.equal(fixed.glyphForCodePoint('i'.codePointAt(0)).advanceWidth,fixed.glyphForCodePoint('M'.codePointAt(0)).advanceWidth);
   const placements=[];
@@ -206,7 +227,7 @@ try {
   const foreignPNG=vm.runInNewContext(`new Uint8Array(${JSON.stringify([...png])})`);
   let rasterCount=0;
   const raster=await render(project,sourceBytes,fontBytes,false,new AbortController().signal,()=>{},undefined,
-    {rasterize:async()=>{rasterCount++;return foreignPNG;}});
+    {monoFontBytes:monoBytes,rasterize:async()=>{rasterCount++;return foreignPNG;}});
   assert.ok(rasterCount>=2);assert.ok((await PDFDocument.load(raster)).getPageCount()>0);
   console.log('PASS protected-region PNGs returned from another compartment');
   const outputDir=process.env.PAPERWEAVE_SMOKE_OUTPUT;

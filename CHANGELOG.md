@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-alpha.11
+
+- Fall back to the other bundled font for missing glyphs, including the mathematical symbols ∼, ⌈ and ⌉, without replacing the source characters.
+- Validate glyph coverage against the selected font for each run, including inline code.
+- Retain the alpha.10 stage progress panel and cached translations during PDF rebuilds.
+- Complete add-on shutdown cleanup when previously closed reader windows have dead DOM objects.
+
 ## 0.1.0-alpha.10
 
 - Move task status next to the primary actions in a sticky progress panel.

@@ -1,7 +1,7 @@
 import { PDFDocument, PDFEmbeddedPage, PDFImage, PDFFont, PDFPage, rgb, StandardFonts } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import { Block, Project, canTranslate } from './model';
-import { StyledLine, styledRuns, wrapStyled, positionLine } from './typography';
+import { StyledLine, styledRuns, withFontFallback, wrapStyled, positionLine } from './typography';
 
 /** Design B: the divider partitions the usable page width at exactly 60/40. */
 export const LAYOUT = {
@@ -80,19 +80,20 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
   // Use the same embedded Latin serif glyphs in English prose and Chinese translations.
   const english = zhFont;
   const labelFont = await doc.embedFont(StandardFonts.Helvetica);
-  const zhChars = new Set(zhFont.getCharacterSet()), enChars = new Set(english.getCharacterSet());
+  const zhChars = new Set(zhFont.getCharacterSet()), monoChars = new Set(monoFont.getCharacterSet()), enChars = new Set(english.getCharacterSet());
   const plans: Plan[] = [];
   for (const block of project.blocks) {
     signal.throwIfAborted();
-    if (canTranslate(block)) {
-      const absent = [...new Set([...block.translation].filter(c => !/[\n\r\t]/.test(c) && !zhChars.has(c.codePointAt(0)!)))];
-      if (absent.length) throw new Error(`${block.id} 含字体不支持的字符：${absent.slice(0,12).join(' ')}。请修订后重排。`);
-    }
     const heading = block.kind === 'heading';
     const p: Plan = { block, en: [], zh: [], snippets: [], enSize: heading ? 12 : 11.1,
       zhSize: heading ? 11.2 : 10.7, enLead: heading ? 16.4 : LEAD_EN, zhLead: heading ? 16.4 : LEAD_ZH,
       enFont: english };
-    if (canTranslate(block)) p.zh = wrapStyled(styledRuns(block.translation),zhFont,monoFont,p.zhSize,ZW);
+    if (canTranslate(block)) {
+      const runs=withFontFallback(styledRuns(block.translation),zhChars,monoChars);
+      const absent=[...new Set(runs.flatMap(run=>[...run.text].filter(c=>!/[\n\r\t]/.test(c)&&!(run.mono?monoChars:zhChars).has(c.codePointAt(0)!))))];
+      if(absent.length)throw new Error(`${block.id} 含字体不支持的字符：${absent.slice(0,12).join(' ')}。请修订后重排。`);
+      p.zh=wrapStyled(runs,zhFont,monoFont,p.zhSize,ZW);
+    }
     if (!needsSourceTypography(block,enChars)) {
       p.en = block.source.normalize('NFKC').replace(/\r\n?/g,'\n').split('\n').flatMap(paragraph=>{
         const lines=wrap(paragraph,p.enFont,p.enSize,EW);

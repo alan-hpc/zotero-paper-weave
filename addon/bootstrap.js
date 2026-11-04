@@ -18,10 +18,11 @@ async function startup({ id, version, rootURI }) {
 function onMainWindowLoad({ window }) { controller?.attach(window); }
 function onMainWindowUnload({ window }) { controller?.detach(window); }
 async function shutdown() {
-  await controller?.stop();
-  controller = null;
-  chromeHandle?.destruct();
-  chromeHandle = null;
+  try { await controller?.stop(); }
+  finally {
+    controller = null;
+    try { chromeHandle?.destruct(); } finally { chromeHandle = null; }
+  }
 }
 function install() {}
 function uninstall() {}

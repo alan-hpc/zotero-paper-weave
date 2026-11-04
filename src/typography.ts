@@ -2,6 +2,18 @@ import { PDFFont } from 'pdf-lib';
 export interface Run { text: string; mono: boolean }
 export interface StyledLine { runs: Run[]; paragraphEnd: boolean }
 export interface PositionedRun extends Run { x: number; width: number }
+/** Keep each character intact and use the other bundled face only when the preferred face lacks it. */
+export function withFontFallback(runs:Run[],serif:ReadonlySet<number>,mono:ReadonlySet<number>):Run[] {
+  const output:Run[]=[];
+  for(const run of runs)for(const character of run.text){
+    const code=character.codePointAt(0)!;
+    const preferred=run.mono?mono:serif,alternate=run.mono?serif:mono;
+    const useMono=!preferred.has(code)&&alternate.has(code)?!run.mono:run.mono;
+    const last=output.at(-1);
+    if(last?.mono===useMono)last.text+=character;else output.push({text:character,mono:useMono});
+  }
+  return output;
+}
 /** Prose and technical terms share the serif face; only explicit inline code is monospace. */
 export function styledRuns(text: string): Run[] {
   text=text.replace(/\r\n?/g,'\n').replace(/\t/g,'    ');

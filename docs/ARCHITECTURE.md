@@ -34,7 +34,7 @@ The provider emits request waiting/retry states without response bodies or crede
 `render.ts` reflows ordinary English prose and aligns each paragraph with Chinese in a 60/40
 landscape layout. English with mathematical or unsupported typography uses high-resolution original PDF snippets.
 Body text is justified at word spaces and CJK boundaries; explicit paragraph endings stay left aligned across page continuations. Latin words and inline-code spacing remain intact, and headings are not justified.
-English prose, Chinese translations and English technical terms share a complete embedded static TrueType Noto Serif derivative. Only explicit inline-code runs use an embedded Sarasa Mono derivative. Term protection is independent of typography.
+English prose, Chinese translations and English technical terms share a complete embedded static TrueType Noto Serif derivative. Inline-code runs use an embedded Sarasa Mono derivative; missing glyphs fall back to the other bundled font without replacing the character. Term protection is independent of typography.
 `snippets.ts` adapts Zotero's PDF.js reader to render protected regions without copying hidden source text.
 It clones parameters into the reader compartment and copies returned binary data into the workbench compartment. Protected blocks are
 embedded once without translation. An optional full-source appendix guards against extraction

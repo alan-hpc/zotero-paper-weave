@@ -272,19 +272,21 @@ export function attach(window: any) {
 }
 export function detach(window: any) {
   const entry = menus.get(window);
-  entry?.popup?.removeEventListener('popupshowing', entry.listener);
-  entry?.nodes.forEach(n => n.remove()); menus.delete(window);
+  // Reader/window compartments may already have been destroyed during an add-on update.
+  try { entry?.popup?.removeEventListener('popupshowing', entry.listener); } catch {}
+  entry?.nodes.forEach(n => { try { n.remove(); } catch {} });menus.delete(window);
 }
 export async function stop() {
-  await Promise.allSettled([...windows.values()].filter(w => !w.closed)
-    .map(w => w.paperWeaveBeforeShutdown?.()));
+  await Promise.allSettled([...windows.values()].map(async w => {
+    try { if (!w.closed) await w.paperWeaveBeforeShutdown?.(); } catch {}
+  }));
   active = false;
   preferred?.uninstall();
   if (toolbarHandler) Zotero.Reader.unregisterEventListener?.('renderToolbar', toolbarHandler);
   toolbarHandler = undefined;
-  for (const button of readerButtons) button.remove();
+  for (const button of readerButtons) { try { button.remove(); } catch {} }
   readerButtons.clear();
-  for (const w of windows.values()) { if (!w.closed) w.close(); }
+  for (const w of windows.values()) { try { if (!w.closed) w.close(); } catch {} }
   windows.clear(); locks.clear();
   for (const w of menus.keys()) detach(w);
 }
