@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN">
+<head>
+  <title>PaperWeave · 论文织译</title>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="workbench.css" />
+  <script src="workbench.js" defer="defer"></script>
+</head>
+<body>
+  <header><img src="icon.svg" width="38" height="38" alt="" />
+    <div><h1>PaperWeave <span>论文织译</span><small>ALPHA</small></h1><p id="paper-title">正在载入 PDF…</p></div>
+  </header>
+  <details id="settings-panel">
+    <summary>模型与翻译偏好</summary>
+    <div class="settings-grid">
+      <label>API Base URL<input id="base" type="url" placeholder="https://api.deepseek.com/v1" /></label>
+      <label>模型名称<input id="model" type="text" placeholder="deepseek-flash" /></label>
+      <label>API Key<input id="key" type="password" autocomplete="off" placeholder="留空可使用本地无密钥服务" /></label>
+    </div>
+    <label>补充翻译偏好（可选）<textarea id="prompt" rows="2" placeholder="例如：行文简洁，保留原文中的所有符号。"></textarea></label>
+    <div class="row"><button id="save-settings">保存设置</button><button id="delete-key" class="subtle">删除此端点的 Key</button><span id="key-status"></span></div>
+    <p class="hint">点击识别术语或翻译会将对应论文文本发送到此端点，并可能产生费用。Key 存于 Zotero 凭据管理器；不会写入翻译项目或 PDF。</p>
+  </details>
+  <nav aria-label="翻译操作">
+    <button id="terms-action">1 识别本文术语</button><button id="translate" class="primary">2 翻译未完成段落</button>
+    <button id="generate" class="primary">3 生成并导入双语 PDF</button><button id="cancel" disabled="disabled">取消</button>
+  </nav>
+  <p class="notice">版面识别可能有误。请复核正文与图表分类；图表、图注、表格、公式、代码及参考文献默认保留原文。扫描件需先 OCR。</p>
+  <div id="status" role="status" aria-live="polite">准备中…</div>
+  <main>
+    <aside><div class="list-heading"><strong>段落</strong><select id="filter" aria-label="筛选段落"><option value="all">全部</option><option value="pending">未翻译</option><option value="editable">正文 / 标题</option><option value="keep">保留英文</option></select></div><div id="block-list"></div></aside>
+    <section class="editor">
+      <div class="row"><strong id="block-title">请选择段落</strong><label class="inline">区域类型 <select id="kind"><option value="body">正文（翻译）</option><option value="heading">标题（翻译）</option><option value="figure">图（原文）</option><option value="caption">图注 / 表注（原文）</option><option value="table">表格（原文）</option><option value="math">公式（原文）</option><option value="code">代码（原文）</option><option value="reference">参考文献（原文）</option><option value="keep">其他（保留英文）</option></select></label></div>
+      <label class="area">英文原文<textarea id="source" readonly="readonly" spellcheck="false"></textarea></label>
+      <label class="area">中文译文（可以直接修改）<textarea id="translation" spellcheck="false" placeholder="生成译文后可在此修订；原文保留区域无需填写。"></textarea></label>
+      <div class="row"><button id="save-edit">保存修订</button><button id="retranslate">重新翻译本段（覆盖）</button><span id="edit-status"></span></div>
+    </section>
+  </main>
+  <details id="terms-panel"><summary>本文术语表（每行一个；保留英文原样）</summary><textarea id="terms" rows="6" spellcheck="false"></textarea><p class="hint">自动识别后可增删。变更词表会用于之后的翻译；已有译文需选择对应段落重新翻译。每篇论文使用独立词表。</p><button id="save-terms">保存词表</button></details>
+  <footer>
+    <label class="inline"><input id="appendix" type="checkbox" checked="checked" />附加完整原 PDF，便于复核遗漏</label>
+    <div class="row"><button id="export">导出修订项目</button><button id="import">导入修订项目（覆盖译文）</button></div>
+    <p class="hint">项目自动保存在本机 Zotero 数据目录，默认不随 Zotero 同步。每次生成新 PDF 附件；旧版批注不会自动迁移。</p>
+  </footer>
+</body></html>

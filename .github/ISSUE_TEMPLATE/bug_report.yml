@@ -1,0 +1,20 @@
+name: Bug report / 问题反馈
+description: Report an alpha issue without exposing private data.
+body:
+  - type: input
+    id: versions
+    attributes:
+      label: Zotero / PaperWeave / OS versions
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps, expected result, actual result
+      description: Do not include API keys or private paper contents.
+    validations:
+      required: true
+  - type: textarea
+    id: sample
+    attributes:
+      label: Public sample / redacted screenshot (optional)

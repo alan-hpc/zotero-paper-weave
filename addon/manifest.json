@@ -1,0 +1,17 @@
+{
+  "manifest_version": 2,
+  "name": "PaperWeave 论文织译",
+  "version": "0.1.0-alpha.1",
+  "description": "逐段英中 PDF、本文术语识别、图表保留与可编辑译文。需要 Zotero 10。",
+  "author": "PaperWeave contributors",
+  "icons": { "48": "chrome/content/icon.svg", "96": "chrome/content/icon.svg" },
+  "homepage_url": "https://github.com/alan-hpc/zotero-paper-weave",
+  "applications": {
+    "zotero": {
+      "id": "paperweave@alan-hpc.github.io",
+      "strict_min_version": "10.0",
+      "strict_max_version": "10.*",
+      "update_url": "https://github.com/alan-hpc/zotero-paper-weave/releases/latest/download/updates.json"
+    }
+  }
+}
