@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "PaperWeave 论文织译",
-  "version": "0.1.0-alpha.8",
+  "version": "0.1.0-alpha.9",
   "description": "逐段英中 PDF、本文术语识别、图表保留与可编辑译文。需要 Zotero 10。",
   "author": "PaperWeave contributors",
   "icons": {

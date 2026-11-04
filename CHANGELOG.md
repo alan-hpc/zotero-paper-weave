@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-alpha.9
+
+- Justify English and Chinese body paragraphs while keeping paragraph endings left aligned, including explicit breaks and page continuations.
+- Expand English word spaces and CJK boundaries without stretching Latin words or inline-code spacing.
+- Preserve natural heading alignment and protected original figures, tables and captions.
+- Validate line geometry and rebuild the cached two-paragraph sample without model calls.
+
 ## 0.1.0-alpha.8
 
 - Use the same embedded serif face for English prose, Chinese translations and English technical terms.

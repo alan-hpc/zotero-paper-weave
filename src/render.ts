@@ -1,7 +1,7 @@
 import { PDFDocument, PDFEmbeddedPage, PDFImage, PDFFont, PDFPage, rgb, StandardFonts } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import { Block, Project, canTranslate } from './model';
-import { Run, styledRuns, wrapStyled } from './typography';
+import { StyledLine, styledRuns, wrapStyled, positionLine } from './typography';
 
 /** Design B: the divider partitions the usable page width at exactly 60/40. */
 export const LAYOUT = {
@@ -21,7 +21,8 @@ export interface Placement {
   chinese: { x: number; width: number; height: number };
 }
 interface Snippet { sourcePage: number; box: { left: number; bottom: number; right: number; top: number }; width: number; height: number; embedded?: PDFEmbeddedPage; image?:PDFImage }
-interface Plan { block: Block; en: string[]; zh: Run[][]; snippets: Snippet[]; enSize: number; zhSize: number; enLead: number; zhLead: number; enFont: PDFFont }
+interface EnglishLine { text: string; paragraphEnd: boolean }
+interface Plan { block: Block; en: EnglishLine[]; zh: StyledLine[]; snippets: Snippet[]; enSize: number; zhSize: number; enLead: number; zhLead: number; enFont: PDFFont }
 export interface RenderOptions { monoFontBytes?:Uint8Array; rasterize?:(pageIndex:number,box:Snippet['box'])=>Promise<Uint8Array> }
 
 export function wrap(text: string, font: PDFFont, size: number, width: number): string[] {
@@ -93,7 +94,10 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
       enFont: english };
     if (canTranslate(block)) p.zh = wrapStyled(styledRuns(block.translation),zhFont,monoFont,p.zhSize,ZW);
     if (!needsSourceTypography(block,enChars)) {
-      p.en = wrap(block.source.normalize('NFKC'),p.enFont,p.enSize,EW);
+      p.en = block.source.normalize('NFKC').replace(/\r\n?/g,'\n').split('\n').flatMap(paragraph=>{
+        const lines=wrap(paragraph,p.enFont,p.enSize,EW);
+        return lines.map((text,i)=>({text,paragraphEnd:i===lines.length-1}));
+      });
     } else {
       for (const r of block.rects) {
         const crop = source.getPage(r[0]).getCropBox();
@@ -161,10 +165,18 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
         if(snippet.image)page!.drawImage(snippet.image,placement);else page!.drawPage(snippet.embedded!,placement);
         sourceHeight+=snippet.height; sourceCount++;
       }
-      for(let n=0;n<enCount;n++) if(p.en[e+n]) page!.drawText(p.en[e+n],{x:EX,y:top-p.enSize-n*p.enLead,font:p.enFont,size:p.enSize,color:ink});
+      for(let n=0;n<enCount;n++) {
+        const line=p.en[e+n];
+        for(const run of positionLine([{text:line.text,mono:false}],p.enFont,p.enFont,p.enSize,EW,p.block.kind==='body'&&!line.paragraphEnd)) {
+          if(run.text)page!.drawText(run.text,{x:EX+run.x,y:top-p.enSize-n*p.enLead,font:p.enFont,size:p.enSize,color:ink});
+        }
+      }
       for(let n=0;n<zhCount;n++) {
-        let x=ZX;
-        for(const run of p.zh[z+n]) {const font=run.mono?monoFont:zhFont;page!.drawText(run.text,{x,y:top-p.zhSize-n*p.zhLead,font,size:p.zhSize,color:blue});x+=font.widthOfTextAtSize(run.text,p.zhSize);}
+        const line=p.zh[z+n];
+        for(const run of positionLine(line.runs,zhFont,monoFont,p.zhSize,ZW,p.block.kind==='body'&&!line.paragraphEnd)) {
+          const font=run.mono?monoFont:zhFont;
+          if(run.text)page!.drawText(run.text,{x:ZX+run.x,y:top-p.zhSize-n*p.zhLead,font,size:p.zhSize,color:blue});
+        }
       }
       if (!enCount && !zhCount && !sourceCount) throw new Error(`${p.block.id} 无法分页。`);
       const enHeight=Math.max(enCount*p.enLead,sourceHeight),zhHeight=zhCount*p.zhLead;

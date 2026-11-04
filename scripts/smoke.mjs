@@ -67,21 +67,37 @@ try {
   class BrokenAsset extends AssetRequest {send(){this.onerror();}}
   await assert.rejects(readAsset(BrokenAsset,'jar:file:///addon.xpi!/font.ttf'),/字体加载失败/);
   console.log('PASS packaged binary resource reading for jar URI');
-  const {styledRuns,wrapStyled}=await moduleFor('src/typography.ts');
+  const {styledRuns,wrapStyled,positionLine}=await moduleFor('src/typography.ts');
   const mixed=styledRuns('GPU、kernel 与 kernels，以及 `x = 1`。');
   assert.deepEqual(mixed.filter(r=>r.mono).map(r=>r.text),['x = 1']);
   assert.ok(mixed.some(r=>!r.mono&&r.text.includes('GPU、kernel')));
   const fakeFont={widthOfTextAtSize:(s,size)=>s.length*size/2};
   const wrapped=wrapStyled(mixed,fakeFont,fakeFont,10,70);
-  assert.ok(wrapped.every(line=>line.reduce((n,r)=>n+fakeFont.widthOfTextAtSize(r.text,10),0)<=70));
-  assert.ok(wrapped.flat().some(r=>r.mono&&r.text.includes('x = 1')));
-  assert.equal(wrapped.flat().filter(r=>r.mono).map(r=>r.text).join(''),'x = 1');
+  assert.ok(wrapped.every(line=>line.runs.reduce((n,r)=>n+fakeFont.widthOfTextAtSize(r.text,10),0)<=70));
+  assert.ok(wrapped.flatMap(line=>line.runs).some(r=>r.mono&&r.text.includes('x = 1')));
+  assert.equal(wrapped.flatMap(line=>line.runs).filter(r=>r.mono).map(r=>r.text).join(''),'x = 1');
   const punctuation=wrapStyled(styledRuns('一二三四。五六七八，九十。'),fakeFont,fakeFont,10,20);
-  assert.ok(punctuation.every(line=>! /^[，。；：？！]/.test(line[0]?.text||'')));
+  assert.ok(punctuation.every(line=>! /^[，。；：？！]/.test(line.runs[0]?.text||'')));
   const percent=wrapStyled(styledRuns('一二三四5.30%。五六七八。'),fakeFont,fakeFont,10,50);
-  assert.ok(percent.every(line=>! /^[%％，。；：？！]/.test(line[0]?.text||'')));
-  assert.ok(percent.some(line=>line.map(r=>r.text).join('').includes('5.30%')));
+  assert.ok(percent.every(line=>! /^[%％，。；：？！]/.test(line.runs[0]?.text||'')));
+  assert.ok(percent.some(line=>line.runs.map(r=>r.text).join('').includes('5.30%')));
   console.log('PASS serif prose/terminology and monospace inline-code runs');
+  for(const text of ['GPU kernel performance','中文正文，两端对齐。','正文GPU与 `x = 1` 代码。']){
+    const runs=styledRuns(text),positioned=positionLine(runs,fakeFont,fakeFont,10,200,true);
+    assert.equal(positioned.map(r=>r.text).join(''),runs.map(r=>r.text).join(''));
+    assert.ok(Math.abs(positioned.at(-1).x+positioned.at(-1).width-200)<.001,'justified right edge');
+    assert.ok(positioned.every((r,i)=>!i||r.x>=positioned[i-1].x+positioned[i-1].width-.001));
+    if(text.includes('GPU'))assert.ok(positioned.some(r=>r.text.includes('GPU')),'Latin words stay intact');
+    if(text.includes('`'))assert.equal(positioned.find(r=>r.mono).text,'x = 1','code spacing stays intact');
+    const last=positionLine(runs,fakeFont,fakeFont,10,200,false);
+    assert.equal(last.at(-1).x+last.at(-1).width,runs.reduce((n,r)=>n+fakeFont.widthOfTextAtSize(r.text,10),0),'last line natural width');
+  }
+  const paragraphs=wrapStyled(styledRuns('one two three\nfour five'),fakeFont,fakeFont,10,40);
+  assert.equal(paragraphs.filter(line=>line.paragraphEnd).length,2,'explicit paragraph endings');
+  assert.ok(paragraphs.some(line=>!line.paragraphEnd),'wrapped continuation can justify');
+  const oneWord=positionLine(styledRuns('GPU'),fakeFont,fakeFont,10,200,true);
+  assert.equal(oneWord.at(-1).x+oneWord.at(-1).width,15,'single Latin word is not stretched');
+  console.log('PASS English/CJK justification, punctuation, code spacing and paragraph endings');
 
   // Privileged XHTML does not reliably defer a classic script in the document head.
   const markup=await readFile('addon/chrome/content/workbench.xhtml','utf8');
