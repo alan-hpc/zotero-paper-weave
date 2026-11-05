@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-alpha.12
+
+- Use PDF.js print intent for protected snippets so inactive reader tabs do not wait indefinitely for animation frames.
+- Bound each source-region attempt to 30 seconds and retry once at a lower resolution, with canvas and render-task cleanup.
+- Propagate cancellation through the native renderer and guard unresponsive raster callbacks.
+- Show the current source page, block, rendering stage and region elapsed time; supply host timers explicitly to the controller sandbox.
+- Add offline coverage for background rendering, hangs, retries, encoding failure, cancellation and resource cleanup.
+
 ## 0.1.0-alpha.11
 
 - Fall back to the other bundled font for missing glyphs, including the mathematical symbols ∼, ⌈ and ⌉, without replacing the source characters.

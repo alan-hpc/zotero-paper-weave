@@ -125,7 +125,7 @@ export async function fontBytes() {
   return readAsset(Zotero.getMainWindow().XMLHttpRequest, meta.rootURI + 'chrome/content/fonts/NotoSerifSC-Regular.ttf');
 }
 export async function monoFontBytes() { return readAsset(Zotero.getMainWindow().XMLHttpRequest, meta.rootURI + 'chrome/content/fonts/SarasaMonoSC-Regular.ttf'); }
-export async function sourceRenderer(item: any) { return snippetRenderer(Zotero,item,Cu); }
+export async function sourceRenderer(item: any,signal?:AbortSignal) { return snippetRenderer(Zotero,item,Cu,signal); }
 export function preferBilingual() { return Zotero.Prefs.get(pref + 'preferBilingual', true) !== false; }
 export async function preferOriginal(item: any) {
   if (!item.parentID) throw new Error('独立 PDF 没有父论文条目；请直接打开原文附件。');

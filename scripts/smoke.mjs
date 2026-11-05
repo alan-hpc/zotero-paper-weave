@@ -50,8 +50,8 @@ try {
   const lifecycle=[];
   const sandbox={Components:{classes:{'@mozilla.org/addons/addon-manager-startup;1':{getService:()=>({registerChrome:()=>({destruct:()=>lifecycle.push('destruct')})})}},interfaces:{amIAddonManagerStartup:{}},utils:{}},
     Zotero:{initializationPromise:Promise.resolve(),getMainWindows:()=>['main']},
-    Services:{io:{newURI:x=>x},scriptloader:{loadSubScript:(uri,scope)=>{for(const name of ['Cc','Ci','IOUtils','PathUtils','URL'])assert.ok(scope[name]);scope.PaperWeaveController={start:()=>lifecycle.push('start'),attach:()=>lifecycle.push('attach'),stop:async()=>lifecycle.push('stop')};}}},
-    ChromeUtils:{},IOUtils:{},PathUtils:{},URL};
+    Services:{io:{newURI:x=>x},scriptloader:{loadSubScript:(uri,scope)=>{for(const name of ['Cc','Ci','IOUtils','PathUtils','URL','setTimeout','clearTimeout'])assert.ok(scope[name]);scope.PaperWeaveController={start:()=>lifecycle.push('start'),attach:()=>lifecycle.push('attach'),stop:async()=>lifecycle.push('stop')};}}},
+    ChromeUtils:{importESModule:()=>({setTimeout,clearTimeout})},IOUtils:{},PathUtils:{},URL};
   vm.createContext(sandbox);vm.runInContext(await readFile('addon/bootstrap.js','utf8'),sandbox);
   await sandbox.startup({id:'paperweave@test',version:'test',rootURI:'file:///addon/'});await sandbox.shutdown();
   assert.deepEqual(lifecycle,['start','attach','stop','destruct']);
@@ -71,6 +71,46 @@ try {
     await controllerStop();assert.equal(unregistered,true);
   }finally{globalThis.Zotero=savedHost;}
   console.log('PASS add-on shutdown tolerates dead reader DOM objects');
+
+  const {bounded,StageTimeoutError}=await moduleFor('src/async.ts');
+  let interrupted=0;
+  await assert.rejects(bounded(()=>new Promise(()=>{}),new AbortController().signal,5,'mock region',()=>interrupted++),StageTimeoutError);
+  assert.equal(interrupted,1);
+  const abortBounded=new AbortController();
+  const never=bounded(()=>new Promise(()=>{}),abortBounded.signal,1000,'mock region',()=>interrupted++);
+  abortBounded.abort();await assert.rejects(never,{name:'AbortError'});assert.equal(interrupted,2);
+  const {snippetRenderer}=await moduleFor('src/snippets.ts');
+  const region={left:0,bottom:0,right:10,top:10};
+  const pngBytes=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC0lEQVR42mP8/x8AAwMCAO+hB1cAAAAASUVORK5CYII=','base64');
+  function mockSnippet(mode){
+    const state={renders:0,cancels:0,opens:0,scales:[],canvases:[]};
+    const target={closed:false,document:{createElementNS:()=>{const canvas={width:0,height:0,getContext:()=>({}),toBlob:callback=>{if(mode!=='encode-hang')callback(new Blob([pngBytes]));}};state.canvases.push(canvas);return canvas;}}};
+    const page={getViewport:({scale})=>{state.scales.push(scale);return{convertToViewportRectangle:()=>[0,0,40,40]};},render:options=>{
+      state.renders++;assert.equal(options.intent,'print','inactive source tab must not use animation frames');assert.equal(options.annotationMode,0);
+      return{promise:mode==='hang'||(mode==='retry'&&state.renders===1)?new Promise(()=>{}):Promise.resolve(),cancel:()=>state.cancels++};
+    }};
+    const app={pdfDocument:{getPage:async()=>page},pdfViewer:{container:{ownerDocument:{defaultView:target}}}};
+    const host={getMainWindow:()=>({AbortController}),Promise:{delay:ms=>new Promise(r=>setTimeout(r,ms))},Reader:{open:async()=>{state.opens++;return{_iframeWindow:{wrappedJSObject:{PDFViewerApplication:app}}};}}};
+    return{state,host,utilities:{waiveXrays:x=>x,cloneInto:x=>x}};
+  }
+  for(const mode of ['ok','retry']){
+    const mock=mockSnippet(mode),callback=await snippetRenderer(mock.host,{id:1},mock.utilities,undefined,{timeoutMS:10});
+    assert.deepEqual([...await callback(10,region)],[...pngBytes]);
+    assert.equal(mock.state.renders,mode==='retry'?2:1);
+    if(mode==='retry'){assert.equal(mock.state.cancels,1);assert.deepEqual(mock.state.scales,[4,2]);assert.equal(mock.state.opens,2);}
+    assert.ok(mock.state.canvases.every(c=>!c.width&&!c.height),'canvas released after render');
+  }
+  for(const mode of ['hang','encode-hang']){
+    const mock=mockSnippet(mode),callback=await snippetRenderer(mock.host,{id:1},mock.utilities,undefined,{timeoutMS:5});
+    await assert.rejects(callback(10,region),/源页 11.*两次渲染均未完成/);
+    assert.equal(mock.state.renders,2);assert.ok(mock.state.canvases.every(c=>!c.width&&!c.height));
+  }
+  const cancelledMock=mockSnippet('hang'),cancelledRender=new AbortController();
+  const cancellable=await snippetRenderer(cancelledMock.host,{id:1},cancelledMock.utilities,undefined,{timeoutMS:1000});
+  const cancelledPromise=cancellable(10,region,cancelledRender.signal);
+  await new Promise(r=>setTimeout(r,0));cancelledRender.abort();
+  await assert.rejects(cancelledPromise,{name:'AbortError'});assert.equal(cancelledMock.state.cancels,1);assert.equal(cancelledMock.state.renders,1);
+  console.log('PASS background print rendering, timeout/retry, PNG encoding cancellation and canvas cleanup');
 
   const {readAsset}=await moduleFor('src/assets.ts');
   class AssetRequest {
@@ -230,6 +270,11 @@ try {
     {monoFontBytes:monoBytes,rasterize:async()=>{rasterCount++;return foreignPNG;}});
   assert.ok(rasterCount>=2);assert.ok((await PDFDocument.load(raster)).getPageCount()>0);
   console.log('PASS protected-region PNGs returned from another compartment');
+  const cancelledLegacy=new AbortController();
+  const cancelledPDF=render(project,sourceBytes,fontBytes,false,cancelledLegacy.signal,()=>{},undefined,{monoFontBytes:monoBytes,
+    rasterize:async(_page,_box,signal)=>{assert.equal(signal,cancelledLegacy.signal);cancelledLegacy.abort();return new Promise(()=>{});}});
+  await assert.rejects(cancelledPDF,{name:'AbortError'});
+  console.log('PASS PDF generation can cancel an unresponsive raster callback');
   const outputDir=process.env.PAPERWEAVE_SMOKE_OUTPUT;
   if(outputDir) { await mkdir(outputDir,{recursive:true});await writeFile(join(outputDir,'layout-B-smoke.pdf'),result);await writeFile(join(outputDir,'layout-B-revised.pdf'),revised);await writeFile(join(outputDir,'placements.json'),JSON.stringify(placements,null,2)); }
   project.blocks[1].translation='';

@@ -9,7 +9,8 @@ async function startup({ id, version, rootURI }) {
     .getService(Ci.amIAddonManagerStartup)
     .registerChrome(Services.io.newURI(rootURI + "manifest.json"),
       [["content", "paperweave", "chrome/content/"]]);
-  const scope = { Zotero, Services, Cc, Ci, Cu, ChromeUtils, IOUtils, PathUtils, URL };
+  const { setTimeout, clearTimeout } = ChromeUtils.importESModule('resource://gre/modules/Timer.sys.mjs');
+  const scope = { Zotero, Services, Cc, Ci, Cu, ChromeUtils, IOUtils, PathUtils, URL, setTimeout, clearTimeout };
   Services.scriptloader.loadSubScript(rootURI + "controller.js", scope);
   controller = scope.PaperWeaveController;
   controller.start({ id, version, rootURI });

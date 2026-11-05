@@ -19,13 +19,17 @@ let autosave: ReturnType<typeof setTimeout> | undefined;
 let progressTimer: ReturnType<typeof setInterval> | undefined;
 let started=0,requestStarted=0;
 let requestState:RequestProgress|null=null;
+let phaseKey='',phaseLabel='',phaseStarted=0;
 const actions = ['start','terms-action','translate','generate','retranslate','import','export','save-edit','save-terms','save-settings','delete-key','import-settings','prefer-original'];
 const status = (s: string, error = false) => { $('status').textContent = s; $('status').classList.toggle('error', error); };
 function tickProgress() {
   $('progress-time').textContent=`本次任务用时 ${formatDuration(Date.now()-started)}`;
-  $('request-detail').textContent=requestProgressText(requestState,Date.now()-requestStarted);
+  $('request-detail').textContent=requestState?requestProgressText(requestState,Date.now()-requestStarted):
+    phaseLabel==='保留原文区域'?`本区域用时 ${formatDuration(Date.now()-phaseStarted)} · 每次最多 30 秒，失败重试一次`:'';
 }
 function phase(label:string,completed?:number,total?:number,unit='') {
+  const key=`${label}:${completed}:${total}`;
+  if(key!==phaseKey){phaseKey=key;phaseLabel=label;phaseStarted=Date.now();}
   const meter=$<HTMLProgressElement>('job-progress');
   if(total!==undefined && total>0){meter.max=total;meter.value=Math.min(completed||0,total);}
   else meter.removeAttribute('value');
@@ -148,7 +152,7 @@ bind('import-settings', async () => {
   status(result.importedKey ? '已导入幻觉翻译的模型与 Key，Key 未显示。' : '已导入模型配置，请补充 API Key。');
 });
 bind('save-edit', async () => { await save(); status('修订已保存；点击生成 PDF 即可重排。'); });
-bind('cancel', () => { abort?.abort(); status('正在取消；本地结构分析可能需要等待当前步骤结束…'); });
+bind('cancel', () => { abort?.abort(); status('正在取消当前任务；已保存的译文会保留…'); });
 bind('terms-action', () => run(async signal => {
   const { client } = await provider(signal);
   project!.terms = await client.terms(project!.blocks, termProgress);
@@ -196,9 +200,9 @@ async function generatePDF(signal: AbortSignal) {
   const bytes = await host.sourceBytes(host.item,project);
   const font = await host.fontBytes();
   const monoFont = await host.monoFontBytes();
-  const rasterize = await host.sourceRenderer(host.item);
+  const rasterize = await host.sourceRenderer(host.item,signal);
   const output = await render(project!, new Uint8Array(bytes), new Uint8Array(font), input('appendix').checked, signal,message=>{
-    const step=message.match(/^(保留原文区域|60\/40 逐段排版) (\d+)\/(\d+)$/);
+    const step=message.match(/^(保留原文区域|60\/40 逐段排版) (\d+)\/(\d+)/);
     if(step)phase(step[1],Number(step[2])-1,Number(step[3]),'个');else phase('写入 PDF');
     status(message);
   },

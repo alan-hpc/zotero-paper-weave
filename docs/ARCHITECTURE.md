@@ -36,6 +36,7 @@ landscape layout. English with mathematical or unsupported typography uses high-
 Body text is justified at word spaces and CJK boundaries; explicit paragraph endings stay left aligned across page continuations. Latin words and inline-code spacing remain intact, and headings are not justified.
 English prose, Chinese translations and English technical terms share a complete embedded static TrueType Noto Serif derivative. Inline-code runs use an embedded Sarasa Mono derivative; missing glyphs fall back to the other bundled font without replacing the character. Term protection is independent of typography.
 `snippets.ts` adapts Zotero's PDF.js reader to render protected regions without copying hidden source text.
+It uses print intent to avoid requestAnimationFrame in inactive reader tabs. Each attempt is bounded to 30 seconds, with one lower-resolution retry; `async.ts` provides cancellation and deadline guards for host promises. Render tasks are cancelled and canvases released on interruption.
 It clones parameters into the reader compartment and copies returned binary data into the workbench compartment. Protected blocks are
 embedded once without translation. An optional full-source appendix guards against extraction
 omissions. It does not preserve source annotations in clipped snippets.

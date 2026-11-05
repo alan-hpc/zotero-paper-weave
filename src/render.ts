@@ -2,6 +2,7 @@ import { PDFDocument, PDFEmbeddedPage, PDFImage, PDFFont, PDFPage, rgb, Standard
 import fontkit from '@pdf-lib/fontkit';
 import { Block, Project, canTranslate } from './model';
 import { StyledLine, styledRuns, withFontFallback, wrapStyled, positionLine } from './typography';
+import { bounded } from './async';
 
 /** Design B: the divider partitions the usable page width at exactly 60/40. */
 export const LAYOUT = {
@@ -20,10 +21,10 @@ export interface Placement {
   english: { x: number; width: number; height: number };
   chinese: { x: number; width: number; height: number };
 }
-interface Snippet { sourcePage: number; box: { left: number; bottom: number; right: number; top: number }; width: number; height: number; embedded?: PDFEmbeddedPage; image?:PDFImage }
+interface Snippet { blockID:string;sourcePage: number; box: { left: number; bottom: number; right: number; top: number }; width: number; height: number; embedded?: PDFEmbeddedPage; image?:PDFImage }
 interface EnglishLine { text: string; paragraphEnd: boolean }
 interface Plan { block: Block; en: EnglishLine[]; zh: StyledLine[]; snippets: Snippet[]; enSize: number; zhSize: number; enLead: number; zhLead: number; enFont: PDFFont }
-export interface RenderOptions { monoFontBytes?:Uint8Array; rasterize?:(pageIndex:number,box:Snippet['box'])=>Promise<Uint8Array> }
+export interface RenderOptions { monoFontBytes?:Uint8Array; rasterize?:(pageIndex:number,box:Snippet['box'],signal:AbortSignal,notice:(message:string)=>void)=>Promise<Uint8Array> }
 
 export function wrap(text: string, font: PDFFont, size: number, width: number): string[] {
   const output: string[] = [];
@@ -110,7 +111,7 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
         const bottom = Math.max(crop.y,r[2]-1), top = Math.min(crop.y+crop.height,r[4]+1);
         if (right <= left || top <= bottom) throw new Error(`${block.id} 的裁剪坐标超出原 PDF。`);
         const scale = Math.min(1.35, EW/(right-left), (USABLE-8)/(top-bottom));
-        p.snippets.push({ sourcePage:r[0],box:{left,right,bottom,top},width:(right-left)*scale,height:(top-bottom)*scale });
+        p.snippets.push({ blockID:block.id,sourcePage:r[0],box:{left,right,bottom,top},width:(right-left)*scale,height:(top-bottom)*scale });
       }
       if (!p.snippets.length) throw new Error(`${block.id} 缺少原文坐标，无法保留其原始排版。`);
     }
@@ -119,9 +120,13 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
   const snippets = plans.flatMap(p=>p.snippets);
   if (snippets.length && options.rasterize) {
     for(const [i,snippet] of snippets.entries()) {
-      signal.throwIfAborted();progress(`保留原文区域 ${i+1}/${snippets.length}`);
+      signal.throwIfAborted();
+      const label=`保留原文区域 ${i+1}/${snippets.length} · 源页 ${snippet.sourcePage+1} · ${snippet.blockID}`;
+      progress(label);
       // Host callbacks return typed arrays from a different privileged compartment.
-      snippet.image=await doc.embedPng(new Uint8Array(await options.rasterize(snippet.sourcePage,snippet.box)));
+      const png=await bounded(()=>options.rasterize!(snippet.sourcePage,snippet.box,signal,detail=>progress(`${label} · ${detail}`)),signal,90000,label);
+      signal.throwIfAborted();
+      snippet.image=await bounded(()=>doc.embedPng(new Uint8Array(png)),signal,15000,`${label} 图像载入`);
     }
   } else if (snippets.length) {
     const embedded = await doc.embedPages(snippets.map(s=>source.getPage(s.sourcePage)),snippets.map(s=>s.box));
