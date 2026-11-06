@@ -13,7 +13,7 @@ async function startup({ id, version, rootURI }) {
   const scope = { Zotero, Services, Cc, Ci, Cu, ChromeUtils, IOUtils, PathUtils, URL, setTimeout, clearTimeout };
   Services.scriptloader.loadSubScript(rootURI + "controller.js", scope);
   controller = scope.PaperWeaveController;
-  controller.start({ id, version, rootURI });
+  await controller.start({ id, version, rootURI });
   for (const window of Zotero.getMainWindows()) controller.attach(window);
 }
 function onMainWindowLoad({ window }) { controller?.attach(window); }

@@ -23,14 +23,14 @@ try {
     async getBestAttachments() { return [...this.attachments]; }
     async getBestAttachment() { return this.best ||= (await this.getBestAttachments())[0]; }
   }
-  const host={Item,Prefs:{get:k=>prefs.get(k),set:(k,v)=>prefs.set(k,v)},Items:{getByLibraryAndKey:(id,key)=>parents.get(`${id}:${key}`)||false}};
+  const host={Item,Prefs:{get:k=>prefs.get(k),set:(k,v)=>prefs.set(k,v)},Items:{getByLibraryAndKeyAsync:async(id,key)=>parents.get(`${id}:${key}`)||false}};
   const originalMethod=Item.prototype.getBestAttachments;
   const paper=new Item(1,'PARENT01'),other=new Item(2,'PARENT02');
   const pdf=(key,parent)=>({key,parentID:parent.id,libraryID:parent.libraryID,deleted:false,isPDFAttachment:()=>true});
   const source=pdf('SOURCE01',paper),output=pdf('OUTPUT01',paper),otherSource=pdf('SOURCE02',other);
   paper.attachments=[source,output];other.attachments=[otherSource];
   await paper.getBestAttachment();
-  const manager=new PreferredAttachments(host);manager.install();
+  const manager=new PreferredAttachments(host);await manager.install();
   await manager.select(paper,output);
   assert.equal(await paper.getBestAttachment(),output,'clear cached original');
   assert.deepEqual(await other.getBestAttachments(),[otherSource],'per-paper isolation');
@@ -38,19 +38,41 @@ try {
   output.deleted=true;paper.clearBestAttachmentState();
   assert.equal((await paper.getBestAttachments())[0],source,'deleted preferred fallback');
   output.deleted=false;
-  manager.uninstall();assert.equal(Item.prototype.getBestAttachments,originalMethod);
-  const restarted=new PreferredAttachments(host);restarted.install();
+  await manager.uninstall();assert.equal(Item.prototype.getBestAttachments,originalMethod);
+  const restarted=new PreferredAttachments(host);await restarted.install();
   assert.equal(await paper.getBestAttachment(),output,'persisted preference after restart');
   await restarted.select(paper,source);assert.equal(await paper.getBestAttachment(),source,'restore original');
-  restarted.uninstall();
+  await restarted.uninstall();
   prefs.set('extensions.paperweave.preferredAttachments','{"9:MISSING1":"OUTPUT01"}');
-  const missing=new PreferredAttachments(host);missing.install();missing.uninstall();
+  const missing=new PreferredAttachments(host);await missing.install();await missing.uninstall();
   console.log('PASS preferred attachments: cache, isolation, persistence, fallback, restore');
+
+  prefs.set('extensions.paperweave.preferredAttachments',JSON.stringify({'1:BROKEN01':'OUTPUT01','1:PARENT01':'OUTPUT01','1:PARENT02':'SOURCE02'}));
+  let syncReads=0;const coldLoads=[],cacheErrors=[];
+  const coldHost={...host,logError:error=>cacheErrors.push(error.message),Items:{
+    getByLibraryAndKey(){syncReads++;throw new Error('Item 2468 not yet loaded');},
+    async getByLibraryAndKeyAsync(id,key){
+      coldLoads.push(key);await Promise.resolve();
+      if(key==='BROKEN01')throw new Error('unavailable item');
+      return parents.get(`${id}:${key}`)||false;
+    }
+  }};
+  paper.best=source;other.best=otherSource;
+  const cold=new PreferredAttachments(coldHost);await cold.install();
+  assert.equal(syncReads,0,'startup must load saved parent items asynchronously');
+  assert.deepEqual(coldLoads,['BROKEN01','PARENT01','PARENT02'],'one failure does not skip later choices');
+  assert.equal(paper.best,null,'loaded original attachment cache is invalidated');
+  assert.equal(await paper.getBestAttachment(),output,'saved preference restored from a cold item cache');
+  await cold.uninstall();
+  assert.equal(Item.prototype.getBestAttachments,originalMethod);
+  assert.equal(await paper.getBestAttachment(),source,'disable clears cached preference');
+  assert.deepEqual(cacheErrors,['unavailable item','unavailable item']);
+  console.log('PASS cold-start preferences: unloaded items, isolated failures, restore and shutdown');
 
   const lifecycle=[];
   const sandbox={Components:{classes:{'@mozilla.org/addons/addon-manager-startup;1':{getService:()=>({registerChrome:()=>({destruct:()=>lifecycle.push('destruct')})})}},interfaces:{amIAddonManagerStartup:{}},utils:{}},
     Zotero:{initializationPromise:Promise.resolve(),getMainWindows:()=>['main']},
-    Services:{io:{newURI:x=>x},scriptloader:{loadSubScript:(uri,scope)=>{for(const name of ['Cc','Ci','IOUtils','PathUtils','URL','setTimeout','clearTimeout'])assert.ok(scope[name]);scope.PaperWeaveController={start:()=>lifecycle.push('start'),attach:()=>lifecycle.push('attach'),stop:async()=>lifecycle.push('stop')};}}},
+    Services:{io:{newURI:x=>x},scriptloader:{loadSubScript:(uri,scope)=>{for(const name of ['Cc','Ci','IOUtils','PathUtils','URL','setTimeout','clearTimeout'])assert.ok(scope[name]);scope.PaperWeaveController={start:async()=>{await Promise.resolve();lifecycle.push('start');},attach:()=>lifecycle.push('attach'),stop:async()=>lifecycle.push('stop')};}}},
     ChromeUtils:{importESModule:()=>({setTimeout,clearTimeout})},IOUtils:{},PathUtils:{},URL};
   vm.createContext(sandbox);vm.runInContext(await readFile('addon/bootstrap.js','utf8'),sandbox);
   await sandbox.startup({id:'paperweave@test',version:'test',rootURI:'file:///addon/'});await sandbox.shutdown();
@@ -66,7 +88,7 @@ try {
   class ShutdownItem {async getBestAttachments(){return [];}}
   try{
     globalThis.Zotero={Item:ShutdownItem,Prefs:{get:()=>undefined},Reader:{registerEventListener:(_name,listener)=>{readerListener=listener;},unregisterEventListener:()=>{unregistered=true;}}};
-    controllerStart({id:'shutdown-test',version:'test',rootURI:'file:///addon/'});
+    await controllerStart({id:'shutdown-test',version:'test',rootURI:'file:///addon/'});
     readerListener({reader:{itemID:1},doc:{createElement:()=>({style:{},setAttribute(){},addEventListener(){},remove(){throw new Error('dead reader compartment');}})},append(){}});
     await controllerStop();assert.equal(unregistered,true);
   }finally{globalThis.Zotero=savedHost;}

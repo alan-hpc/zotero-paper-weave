@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-alpha.13
+
+- Restore saved preferred attachments with the asynchronous Zotero item loader so uncached parent items cannot abort startup and hide all translation entry points.
+- Isolate cache restoration failures per paper and wait for restoration during startup and shutdown.
+- Add offline regression coverage for cold item caches, unavailable records, preference restoration and asynchronous bootstrap ordering.
+- Verify the installed alpha.13 menu after an actual Zotero 10.0.7 restart on macOS, retaining saved preferred-attachment choices.
+
 ## 0.1.0-alpha.12
 
 - Use PDF.js print intent for protected snippets so inactive reader tabs do not wait indefinitely for animation frames.

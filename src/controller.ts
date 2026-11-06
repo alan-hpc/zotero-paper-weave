@@ -19,10 +19,10 @@ const origin = 'chrome://paperweave';
 const realm = (base: string) => endpoint(base);
 const directory = () => PathUtils.join(Zotero.DataDirectory.dir, 'paperweave');
 
-export function start(m: typeof meta) {
+export async function start(m: typeof meta) {
   meta = m; active = true;
   preferred = new PreferredAttachments(Zotero);
-  preferred.install();
+  await preferred.install();
   if (Zotero.Reader?.registerEventListener) {
     toolbarHandler = ({ reader, doc, append }: any) => {
       const button = doc.createElement('button');
@@ -281,7 +281,7 @@ export async function stop() {
     try { if (!w.closed) await w.paperWeaveBeforeShutdown?.(); } catch {}
   }));
   active = false;
-  preferred?.uninstall();
+  await preferred?.uninstall();
   if (toolbarHandler) Zotero.Reader.unregisterEventListener?.('renderToolbar', toolbarHandler);
   toolbarHandler = undefined;
   for (const button of readerButtons) { try { button.remove(); } catch {} }

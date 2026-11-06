@@ -15,7 +15,7 @@ export class PreferredAttachments {
       }
     } catch { /* A malformed local preference falls back to the host's normal order. */ }
   }
-  install() {
+  async install() {
     if (this.enabled) return;
     const prototype = this.host.Item.prototype;
     if (typeof prototype.getBestAttachments !== 'function') throw new Error('当前 Zotero 不支持首选附件适配。');
@@ -31,7 +31,7 @@ export class PreferredAttachments {
     };
     this.enabled = true;
     prototype.getBestAttachments = this.wrapper;
-    this.clearCaches();
+    await this.clearCaches();
   }
   async select(parent: any, attachment: any) {
     if (!parent?.isRegularItem() || attachment.parentID !== parent.id || attachment.libraryID !== parent.libraryID || !attachment.isPDFAttachment() || attachment.deleted) {
@@ -43,16 +43,24 @@ export class PreferredAttachments {
     const selected = await parent.getBestAttachment();
     if (selected?.key !== attachment.key) throw new Error('其他插件可能影响了附件顺序，请在附件列表中打开双语 PDF。');
   }
-  private clearCaches() {
+  private async clearCaches() {
     for (const key of Object.keys(this.choices)) {
       const [libraryID, itemKey] = key.split(':');
-      this.host.Items.getByLibraryAndKey(Number(libraryID), itemKey)?.clearBestAttachmentState?.();
+      try {
+        // Saved choices can refer to items outside the collection loaded at startup.
+        // The synchronous getter throws for these items and can abort all UI setup.
+        const item = await this.host.Items.getByLibraryAndKeyAsync(Number(libraryID), itemKey);
+        item?.clearBestAttachmentState?.();
+      } catch (error) {
+        // One unavailable item must not prevent menus or other choices from loading.
+        this.host.logError?.(error);
+      }
     }
   }
-  uninstall() {
+  async uninstall() {
     this.enabled = false;
     const prototype = this.host.Item.prototype;
     if (prototype.getBestAttachments === this.wrapper) prototype.getBestAttachments = this.original;
-    this.clearCaches();
+    await this.clearCaches();
   }
 }
