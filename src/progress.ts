@@ -7,6 +7,6 @@ export function formatDuration(milliseconds: number): string {
 
 export function requestProgressText(request:RequestProgress|null,elapsed:number):string {
   if(!request)return '';
-  if(request.phase==='retry')return `HTTP ${request.httpStatus} · ${Math.max(0,Math.ceil(((request.retryAfterMS||0)-elapsed)/1000))} 秒后重试 · 尝试 ${request.attempt}/${request.maxAttempts}`;
-  return `等待模型响应 ${formatDuration(elapsed)} · 尝试 ${request.attempt}/${request.maxAttempts} · 单次超时 120 秒`;
+  if(request.phase==='retry')return `${request.httpStatus ? `HTTP ${request.httpStatus}` : '请求超时'} · ${Math.max(0,Math.ceil(((request.retryAfterMS||0)-elapsed)/1000))} 秒后重试 · 尝试 ${request.attempt}/${request.maxAttempts}`;
+  return `等待模型响应 ${formatDuration(elapsed)} · 尝试 ${request.attempt}/${request.maxAttempts} · 单次超时 ${formatDuration(request.timeoutMS ?? 120000)}`;
 }

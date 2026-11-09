@@ -109,7 +109,7 @@ export async function loadProject(item: any, progress: (s: string) => void, sign
   const hash = await item.attachmentHash;
   const existing = await readJSON(projectPath(item, hash));
   if (existing) {
-    validateProject(existing); existing.pluginVersion = meta.version;
+    validateProject(existing); existing.pluginVersion = meta.version; existing.terminologyBatches ||= [];
     existing.source.title = item.parentItem?.getField('title') || item.getField('title') || existing.source.title;
     return existing;
   }
@@ -199,6 +199,7 @@ export async function importProject(window: any, item: any, current: Project) {
   }
   current.terms = incoming.terms;
   current.terminologyReady = incoming.terminologyReady;
+  current.terminologyBatches = incoming.terminologyBatches || [];
   await saveProject(current);
   return current;
 }

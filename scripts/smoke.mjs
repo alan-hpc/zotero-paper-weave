@@ -179,7 +179,8 @@ try {
   const {formatDuration,requestProgressText}=await moduleFor('src/progress.ts');
   assert.equal(formatDuration(65000),'1 分 5 秒');
   assert.equal(requestProgressText(null,1000),'');
-  assert.match(requestProgressText({phase:'waiting',attempt:1,maxAttempts:3},2000),/等待模型响应 2 秒.*120 秒/);
+  assert.match(requestProgressText({phase:'waiting',attempt:1,maxAttempts:3},2000),/等待模型响应 2 秒.*2 分 0 秒/);
+  assert.match(requestProgressText({phase:'waiting',attempt:1,maxAttempts:2,timeoutMS:90000},2000),/单次超时 1 分 30 秒/);
   assert.match(requestProgressText({phase:'retry',attempt:2,maxAttempts:3,httpStatus:429,retryAfterMS:3000},1000),/HTTP 429 · 2 秒后重试/);
   const {Provider}=await moduleFor('src/provider.ts');
   const originalFetch=globalThis.fetch,requestEvents=[];let modelRequests=0;
@@ -192,10 +193,23 @@ try {
     const provider=new Provider({baseURL:'https://example.test/v1',model:'mock',prompt:''},'',new AbortController().signal,r=>requestEvents.push(r?.phase||'idle'));
     assert.deepEqual(await provider.json('test',{}),{translation:'测试译文'});
     assert.deepEqual(requestEvents,['waiting','retry','idle','waiting','idle']);
-    provider.json=async()=>({terms:[]});
-    const termStages=[];
-    await provider.terms([{kind:'body',source:'a'.repeat(20000)}],(message,completed,total)=>termStages.push([completed,total]));
-    assert.deepEqual(termStages,[[0,2],[1,2],[1,2],[2,2]]);
+    const termStages=[],termSource=[{kind:'body',source:'a'.repeat(20000)}];
+    let termCalls=0,savedBatches=[];
+    provider.json=async(_system,payload)=>{
+      termCalls++;
+      assert.ok(payload.paper.length<=7000,'terminology requests stay below the batch limit');
+      if(termCalls===2)throw new Error('mock interruption');
+      return {terms:[]};
+    };
+    await assert.rejects(provider.terms(termSource,(message,completed,total)=>termStages.push([completed,total]),savedBatches,
+      async batches=>{savedBatches=batches;}),/第 2\/3 批失败；已保存 1\/3 批/);
+    assert.equal(savedBatches.length,1,'first terminology batch is checkpointed before failure');
+    const resumedTerms=await provider.terms(termSource,(message,completed,total)=>termStages.push([completed,total]),savedBatches,
+      async batches=>{savedBatches=batches;});
+    assert.deepEqual(resumedTerms,[]);
+    assert.equal(termCalls,4,'resume skips the saved batch and requests only the remaining two');
+    assert.equal(savedBatches.length,3);
+    assert.ok(termStages.some(([completed,total])=>completed===1&&total===3),'resumption reports the saved batch');
     const failureEvents=[];
     globalThis.fetch=async()=>({ok:false,status:401});
     const failing=new Provider({baseURL:'https://example.test/v1',model:'mock',prompt:''},'',new AbortController().signal,r=>failureEvents.push(r?.phase||'idle'));
@@ -208,7 +222,7 @@ try {
     await assert.rejects(pending,{name:'AbortError'});
     assert.deepEqual(cancelEvents,['waiting','idle'],'request indicator clears after cancellation');
   }finally{globalThis.fetch=originalFetch;}
-  console.log('PASS model waiting/retry progress and completed terminology batches using mock responses');
+  console.log('PASS model progress and resumable, bounded terminology batches using mock responses');
 
   // Privileged XHTML does not reliably defer a classic script in the document head.
   const markup=await readFile('addon/chrome/content/workbench.xhtml','utf8');

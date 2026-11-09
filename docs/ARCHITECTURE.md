@@ -55,6 +55,8 @@ The preference is local and is not synced across devices.
   translation, manual edit flag, and translation model/prompt provenance.
 - `terms`: exact source phrases to preserve; no global hard-coded field vocabulary.
 - `terminologyReady`: distinguishes an intentionally empty glossary from one not yet generated.
+- `terminologyBatches`: optional fingerprinted results for each completed terminology request;
+  older schema-1 projects without this field remain valid and gain resumable checkpoints on analysis.
 - `outputs`: generated attachment keys and creation times.
 - `schema`, `pluginVersion`, `created`, `updated`: format evolution and provenance.
 

@@ -11,6 +11,7 @@ export interface Block {
   translatedWith?: { model: string; promptVersion: string; at: string };
 }
 export interface Term { source: string; reason: string }
+export interface TermBatch { key: string; terms: Term[] }
 export interface Project {
   schema: 1;
   pluginVersion: string;
@@ -19,6 +20,8 @@ export interface Project {
   blocks: Block[];
   terms: Term[];
   terminologyReady: boolean;
+  /** Completed per-paper terminology requests, saved so a long analysis can resume. */
+  terminologyBatches?: TermBatch[];
   outputs: { key: string; created: string }[];
   created: string;
   updated: string;
@@ -50,5 +53,10 @@ export function validateProject(p: unknown): asserts p is Project {
   }
   if (a.terms.some(t => typeof t.source !== 'string' || typeof t.reason !== 'string')) {
     throw new Error('术语格式无效。');
+  }
+  if (a.terminologyBatches !== undefined && (!Array.isArray(a.terminologyBatches) ||
+      a.terminologyBatches.some(b => typeof b?.key !== 'string' || !b.key || !Array.isArray(b.terms) ||
+        b.terms.some(t => typeof t.source !== 'string' || typeof t.reason !== 'string')))) {
+    throw new Error('术语批次缓存格式无效。');
   }
 }

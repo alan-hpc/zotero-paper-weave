@@ -1,4 +1,4 @@
-import { Block, Kind, Project, Settings, canTranslate } from './model';
+import { Block, Kind, Project, Settings, Term, canTranslate } from './model';
 import { Provider, RequestProgress, endpoint, recordTranslation } from './provider';
 import { render } from './render';
 import { formatDuration, requestProgressText } from './progress';
@@ -101,7 +101,8 @@ function select(block: Block) {
 function refresh() {
   if (!project) return;
   area('terms').value = project.terms.map(t => t.source).join('\n');
-  $('terms-action').textContent = project.terminologyReady ? '重新识别术语（覆盖词表）' : '识别本文术语';
+  $('terms-action').textContent = project.terminologyReady ? '重新识别术语（覆盖词表）' :
+    project.terminologyBatches?.length ? `继续识别术语（已保存 ${project.terminologyBatches.length} 批）` : '识别本文术语';
   if (selected) select(project.blocks.find(b => b.id === selected!.id) || project.blocks[0]);
   else if (project.blocks.length) select(project.blocks[0]);
   updateControls();
@@ -153,11 +154,26 @@ bind('import-settings', async () => {
 });
 bind('save-edit', async () => { await save(); status('修订已保存；点击生成 PDF 即可重排。'); });
 bind('cancel', () => { abort?.abort(); status('正在取消当前任务；已保存的译文会保留…'); });
+async function identifyTerms(client: Provider) {
+  const saved=project!.terminologyBatches || [];
+  const terms=await client.terms(project!.blocks,termProgress,saved,async(batches)=>{
+    project!.terminologyBatches=batches;
+    const merged=new Map<string,Term>();
+    for(const batch of batches)for(const term of batch.terms)merged.set(term.source,term);
+    project!.terms=[...merged.values()].sort((a,b)=>a.source.localeCompare(b.source));
+    await save();
+  });
+  project!.terms=terms;
+  project!.terminologyReady=true;
+  await save();
+}
 bind('terms-action', () => run(async signal => {
   const { client } = await provider(signal);
-  project!.terms = await client.terms(project!.blocks, termProgress);
-  project!.terminologyReady = true;
-  await save(); status(`已识别 ${project!.terms.length} 个本文术语，可展开词表修改。`);
+  if(project!.terminologyReady){
+    project!.terminologyReady=false;project!.terms=[];project!.terminologyBatches=[];await save();
+  }
+  await identifyTerms(client);
+  status(`已识别 ${project!.terms.length} 个本文术语，可展开词表修改。`);
   ($('terms-panel') as HTMLDetailsElement).open = true;
 }));
 bind('save-terms', async () => {
@@ -168,8 +184,7 @@ bind('save-terms', async () => {
 });
 async function translateRemaining(client: Provider, settings: Settings, signal: AbortSignal) {
   if (!project!.terminologyReady) {
-    project!.terms = await client.terms(project!.blocks,termProgress);
-    project!.terminologyReady = true; await save();
+    await identifyTerms(client);
   }
   const pending = project!.blocks.filter(b => canTranslate(b) && !b.translation.trim());
   const total=project!.blocks.filter(canTranslate).length;

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-alpha.14
+
+- Split long-paper terminology analysis into requests of at most about 7,000 characters and limit each response to 80 terms.
+- Save every completed terminology batch and resume only unfinished batches after a timeout, cancellation or restart.
+- Retry one timed-out terminology request with a 90-second limit; show the current batch, retry and timeout in progress.
+- Keep completed paragraph translations and manual revisions untouched while terminology analysis resumes.
+- Add offline mock coverage for batch limits, incremental checkpoints and resume behavior.
+
 ## 0.1.0-alpha.13
 
 - Restore saved preferred attachments with the asynchronous Zotero item loader so uncached parent items cannot abort startup and hide all translation entry points.
