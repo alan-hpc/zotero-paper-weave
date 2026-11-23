@@ -1,13 +1,65 @@
-import { Block, Kind, Project, Rect, now } from './model';
+import { Block, Kind, Project, Rect, ListInfo, EXTRACTION_VERSION, now } from './model';
+import { canonicalListSource } from './lists';
+import { scriptSource } from './inlineMath';
+import { recognizeMath } from './mathRecognition';
+import { applyAuthorMetadata } from './frontMatter';
 
 type Node = {
   type?: string; text?: string; content?: Node[]; reference?: boolean;
-  flowClass?: string; anchor?: { pageRects?: number[][] };
+  style?: { bold?: boolean; italic?: boolean; sub?: boolean; sup?: boolean; monospace?: boolean };
+  ordered?: boolean; startIndex?: number;
+  flowClass?: string; anchor?: { pageRects?: number[][]; textMap?: string };
   previousPart?: number[]; nextPart?: number[];
 };
-const textOf = (n: Node): string => typeof n.text === 'string' ? n.text :
-  (n.content || []).map(textOf).join(n.content?.some(c => c.type) ? '\n' : '');
-const normalize = (s: string) => s.replace(/\u00ad/g, '').replace(/\s+/g, ' ').trim();
+interface TextPart { text: string; bold: boolean; script?:boolean }
+function textPartsOf(n: Node, inheritedBold = false): TextPart[] {
+  const mathematicalStyle=!!(n.style?.italic||n.style?.sub||n.style?.sup||n.style?.monospace);
+  const bold = inheritedBold || !!n.style?.bold&&!mathematicalStyle;
+  if (typeof n.text === 'string') return [{ text: scriptSource(n.text,n.style), bold,script:!!(n.style?.sub||n.style?.sup) }];
+  const content = n.content || [], separator = content.some(c => c.type) ? '\n' : '';
+  return content.flatMap((child,index) => {
+    const previous=content[index-1];
+    const labelSpace=!separator&&previous?.style?.bold&&/[.:]$/u.test(previous.text||'')&&
+      /^[A-Za-z]/u.test(child.text||'')?' ':separator;
+    let mathematicalHyphen=false;
+    if(previous?.style?.sub||previous?.style?.sup)try {
+      const runs=JSON.parse(child.anchor?.textMap||'[]');
+      mathematicalHyphen=!!(runs[0]?.[0]&1)&&/^[A-Za-z]/u.test(child.text||'');
+    }catch{}
+    return [...(mathematicalHyphen?[{text:'-',bold}]:index&&labelSpace?[{text:labelSpace,bold}]:[]),...textPartsOf(child,bold)];
+  });
+}
+function normalizeParts(parts: TextPart[]): { text: string; boldRanges: { start: number; end: number }[] } {
+  const chars: { text: string; bold: boolean }[] = [];
+  let pendingSpace = false,pendingSpaceBold = false,lastScript=false;
+  for (const part of parts) {
+    if(part.script&&lastScript)pendingSpace=false;
+    for (const character of part.text) {
+    if (character === '\u00ad') continue;
+    if (/\s/u.test(character)) {
+      if (chars.length) { pendingSpace = true;pendingSpaceBold ||= part.bold; }
+      continue;
+    }
+    if (pendingSpace) { chars.push({ text: ' ', bold: pendingSpaceBold }); pendingSpace = false;pendingSpaceBold=false; }
+    chars.push({ text: character, bold: part.bold });
+    }
+    if(part.text.trim())lastScript=!!part.script;
+  }
+  const text = chars.map(char => char.text).join('');
+  const boldRanges: { start: number; end: number }[] = [];
+  let offset = 0, start = -1;
+  for (const char of chars) {
+    const end = offset + char.text.length;
+    if (char.bold && start < 0) start = offset;
+    if (!char.bold && start >= 0) { boldRanges.push({ start, end: offset }); start = -1; }
+    offset = end;
+  }
+  if (start >= 0) boldRanges.push({ start, end: offset });
+  return { text, boldRanges };
+}
+const hasInlineStyle = (n: Node): boolean => !!(n.style &&
+  (n.style.bold || n.style.italic || n.style.sub || n.style.sup || n.style.monospace)) ||
+  !!n.content?.some(hasInlineStyle);
 
 /** Adapter for Zotero 10 SDT. This file calls the host API; it bundles no host code. */
 export async function extractProject(host: any, item: any, version: string,
@@ -26,13 +78,16 @@ export async function extractProject(host: any, item: any, version: string,
   }
   const roots: Node[] = structure.content;
   if (!Array.isArray(roots)) throw new Error('Zotero 未返回有效的文档结构。');
-  const entries: { node: Node; ref: number[]; inheritedKeep: boolean }[] = [];
-  const visit = (node: Node, ref: number[], keep: boolean) => {
+  const entries: { node: Node; ref: number[]; inheritedKeep: boolean; list?:ListInfo }[] = [];
+  const visit = (node: Node, ref: number[], keep: boolean, list?:ListInfo) => {
     keep ||= !!node.reference || ['auxiliary', 'excluded'].includes(node.flowClass || '');
     // A list is a container; each list item can be a separate paragraph.
     if (node.type === 'list' && node.content) {
-      node.content.forEach((c, i) => visit(c, [...ref, i], keep));
-    } else entries.push({ node, ref, inheritedKeep: keep });
+      node.content.forEach((c, i) => {
+        const marker = node.ordered ? `${(node.startIndex ?? 1) + i}.` : '•';
+        visit(c, [...ref, i], keep, {marker,ordered:!!node.ordered,depth:list?list.depth+1:0});
+      });
+    } else entries.push({ node, ref, inheritedKeep: keep, list });
   };
   roots.forEach((n, i) => visit(n, [i], false));
   const index = new Map(entries.map(e => [e.ref.join('.'), e]));
@@ -46,8 +101,14 @@ export async function extractProject(host: any, item: any, version: string,
     const ref = entry.ref.join('.');
     if (consumed.has(ref)) continue;
     const n = entry.node;
-    let kind: Kind = entry.inheritedKeep ? (n.reference ? 'reference' : 'keep') : mapping[n.type || ''] || 'keep';
-    let source = textOf(n);
+    const semanticKind=mapping[n.type||'']||'keep';
+    // SDT marks displayed equations and other non-prose blocks as auxiliary.
+    // Preserve their semantic type so the renderer can still place them.
+    const protectedKind=['math','figure','table','caption','code'].includes(semanticKind);
+    let kind: Kind = n.reference?'reference':protectedKind?semanticKind:entry.inheritedKeep?'keep':semanticKind;
+    let sourceParts: TextPart[] = textPartsOf(n);
+    const sourceNodes=[n];
+    let preserveSource = hasInlineStyle(n);
     const rects: Rect[] = [];
     const appendRects = (node: Node) => {
       for (const r of node.anchor?.pageRects || []) {
@@ -62,20 +123,36 @@ export async function extractProject(host: any, item: any, version: string,
       const key = next.join('.');
       const e = index.get(key);
       if (!e || consumed.has(key) || e.inheritedKeep || e.node.type !== n.type) break;
-      const tail = textOf(e.node);
-      source = /-$/u.test(source) && /^[a-z]/u.test(tail) ? source.slice(0, -1) + tail : source + ' ' + tail;
+      const tailParts = textPartsOf(e.node), sourceBefore = sourceParts.map(part => part.text).join('');
+      const tail = tailParts.map(part => part.text).join('');
+      if (/-$/u.test(sourceBefore) && /^[a-z]/u.test(tail)) {
+        for (let i=sourceParts.length-1;i>=0;i--) if (sourceParts[i].text) {
+          sourceParts[i] = { ...sourceParts[i], text: sourceParts[i].text.slice(0,-1) }; break;
+        }
+      } else sourceParts.push({ text: ' ', bold: false });
+      sourceParts.push(...tailParts);
+      sourceNodes.push(e.node);
+      preserveSource ||= hasInlineStyle(e.node);
       appendRects(e.node);
       consumed.add(key);
       next = e.node.nextPart;
     }
-    source = normalize(source);
+    const raw = normalizeParts(sourceParts);
+    const normalized=entry.list?canonicalListSource(raw.text,raw.boldRanges,entry.list):{text:raw.text,ranges:raw.boldRanges};
+    const source = normalized.text;
+    const boldWhole = normalized.ranges.length === 1 && normalized.ranges[0].start === 0 &&
+      normalized.ranges[0].end === source.length;
+    const classificationSource = source.replace(/^(?:•\s+|\d+[.)]\s+)/u, '');
     // Independent safeguards for captions, bibliography headings, and metadata.
-    if (/^(?:fig(?:ure)?\.?|table)\s*\d+\s*[.:]/i.test(source)) kind = 'caption';
-    if (/^(?:references|bibliography|literature cited)\s*$/i.test(source)) kind = 'reference';
-    if (/^(?:arxiv:|https?:\/\/|doi:|©|copyright\b)/i.test(source)) kind = 'keep';
+    if ((kind==='body'||kind==='keep')&&/^(?:fig(?:ure)?\.?|table)\s*\d+\s*[.:]/i.test(classificationSource)) kind = 'caption';
+    if (/^(?:references|bibliography|literature cited)\s*$/i.test(classificationSource)) kind = 'reference';
+    if (/^(?:arxiv:|https?:\/\/|doi:|©|copyright\b)/i.test(classificationSource)) kind = 'keep';
     if (!source && !rects.length) continue;
     if (!rects.length) throw new Error(`段落 ${ref} 缺少版面坐标，已停止以避免丢失原文。`);
-    blocks.push({ id: `b${ref}`, source, rects, kind, translation: '', edited: false });
+    blocks.push({ id: `b${ref}`, source, rects, kind, sourceType:n.type, sourceFlowClass:n.flowClass,
+      list:entry.list,translation: '', edited: false, preserveSource,
+      mathSpans:kind==='body'||kind==='heading'?recognizeMath(source,sourceNodes):undefined,
+      sourceBoldRanges: boldWhole ? [] : normalized.ranges, boldWhole });
   }
   const pages = structure.catalog?.pages;
   if (!Array.isArray(pages) || !pages.length || !blocks.some(b => b.kind === 'body' && b.source.length > 60)) {
@@ -85,10 +162,12 @@ export async function extractProject(host: any, item: any, version: string,
   if (pages.some(p => p.rotation && p.rotation !== 0)) {
     throw new Error('首版暂不处理旋转页面。请先在副本中将页面旋正后再翻译。');
   }
-  return {
-    schema: 1, pluginVersion: version,
+  const project:Project={
+    schema: 1, pluginVersion: version, extractionVersion: EXTRACTION_VERSION,
     source: { libraryID: item.libraryID, key: item.key, hash: await item.attachmentHash,
       title: item.parentItem?.getField('title') || item.getField('title') || 'Paper' },
     pages, blocks, terms: [], terminologyReady: false, outputs: [], created: now(), updated: now()
   };
+  applyAuthorMetadata(project);
+  return project;
 }

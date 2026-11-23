@@ -1,7 +1,9 @@
-import { Block, Kind, Project, Settings, Term, canTranslate } from './model';
+import { Block, Kind, ModelEndpoint, Project, ProviderName, Settings, Term, EXTRACTION_VERSION, canTranslate } from './model';
 import { Provider, RequestProgress, endpoint, recordTranslation } from './provider';
 import { render } from './render';
 import { formatDuration, requestProgressText } from './progress';
+import { mathReviewRequired } from './inlineMath';
+import { CODEX_DEFAULT, PROVIDER_LABELS, resolveSettings } from './settings';
 
 async function initialize() {
 const host = (window as any).arguments[0];
@@ -17,15 +19,32 @@ let saving = Promise.resolve();
 let abort: AbortController | undefined;
 let autosave: ReturnType<typeof setTimeout> | undefined;
 let progressTimer: ReturnType<typeof setInterval> | undefined;
-let started=0,requestStarted=0;
-let requestState:RequestProgress|null=null;
+let started=0;
+const requestStates = new Map<string,{state:RequestProgress;started:number}>();
 let phaseKey='',phaseLabel='',phaseStarted=0;
-const actions = ['start','terms-action','translate','generate','retranslate','import','export','save-edit','save-terms','save-settings','delete-key','import-settings','prefer-original'];
+const TRANSLATION_CONCURRENCY = 3;
+const settingActions=['save-settings','use-codex-proxy','delete-key','delete-codex-key','delete-deepseek-key'];
+const actions = ['start','terms-action','translate','retranslate','import','export','save-edit','save-terms',...settingActions,'prefer-original'];
+const profileIDs={codex:{base:'codex-base',model:'codex-model',key:'codex-key',status:'codex-key-status'},
+  deepseek:{base:'deepseek-base',model:'deepseek-model',key:'deepseek-key',status:'deepseek-key-status'},
+  custom:{base:'base',model:'model',key:'key',status:'key-status'}};
 const status = (s: string, error = false) => { $('status').textContent = s; $('status').classList.toggle('error', error); };
+function remapTextRanges<T extends {start:number;end:number}>(before:string,after:string,ranges:T[]=[]):T[]{
+  let prefix=0;
+  while(prefix<before.length&&prefix<after.length&&before[prefix]===after[prefix])prefix++;
+  let suffix=0;
+  while(suffix<before.length-prefix&&suffix<after.length-prefix&&
+    before[before.length-1-suffix]===after[after.length-1-suffix])suffix++;
+  const oldEnd=before.length-suffix,newEnd=after.length-suffix,delta=newEnd-oldEnd;
+  return ranges.flatMap(range=>range.end<=prefix?[{...range}]:range.start>=oldEnd
+    ?[{...range,start:range.start+delta,end:range.end+delta}]:[]);
+}
 function tickProgress() {
   $('progress-time').textContent=`本次任务用时 ${formatDuration(Date.now()-started)}`;
-  $('request-detail').textContent=requestState?requestProgressText(requestState,Date.now()-requestStarted):
-    phaseLabel==='保留原文区域'?`本区域用时 ${formatDuration(Date.now()-phaseStarted)} · 每次最多 30 秒，失败重试一次`:'';
+  const activeRequests=[...requestStates.entries()];
+  $('request-detail').textContent=activeRequests.length
+    ? `模型请求 ${activeRequests.length} 个 · ${activeRequests.map(([id,r])=>`${id}: ${requestProgressText(r.state,Date.now()-r.started)}`).join('；')}`
+    : phaseLabel==='保留原文区域'?`本区域用时 ${formatDuration(Date.now()-phaseStarted)} · 每次最多 30 秒，失败重试一次`:'';
 }
 function phase(label:string,completed?:number,total?:number,unit='') {
   const key=`${label}:${completed}:${total}`;
@@ -39,16 +58,37 @@ const termProgress=(message:string,completed:number,total:number)=>{
   phase('识别术语',completed,total,'批');status(message);
 };
 function showSettings() {
-  const s: Settings = host.settings();
-  input('base').value = s.baseURL; input('model').value = s.model; area('prompt').value = s.prompt;
-  const has = host.hasKey(s.baseURL);
-  input('key').placeholder = has ? '已保存；留空保留现有 Key' : '输入 API Key；本地服务可留空';
-  $('key-status').textContent = has ? '当前端点已保存 Key' : '当前端点未保存 Key';
+  const s=resolveSettings(host.settings());
+  input('primary-provider').value=s.routing.primary;input('auto-fallback').checked=s.routing.autoFallback;area('prompt').value=s.prompt;
+  for(const name of ['codex','deepseek','custom'] as const){
+    const ids=profileIDs[name];input(ids.base).value=s.routing[name].baseURL;input(ids.model).value=s.routing[name].model;
+  }
+  configurationView();
 }
-async function persistSettings(remove = false) {
-  const settings: Settings = { baseURL: input('base').value.trim(), model: input('model').value.trim(), prompt: area('prompt').value };
-  await host.saveSettings(settings, input('key').value.trim(), remove);
-  input('key').value = ''; showSettings();
+function configurationView(){
+  const primary=input('primary-provider').value;
+  $('custom-profile').hidden=primary!=='custom';
+  input('auto-fallback').disabled=busy||primary!=='codex';
+  for(const [name,ids] of Object.entries(profileIDs)){
+    try{
+      const has=host.hasKey(input(ids.base).value);
+      input(ids.key).placeholder=has?'已保存；留空保留现有 Key':name==='codex'?'本机 Codex 代理留空':'输入 API Key';
+      $(ids.status).textContent=has?'此端点已保存 Key':'此端点未保存 Key';
+    }catch{$(ids.status).textContent='Base URL 无效';}
+  }
+  let ready=!!input('deepseek-key').value.trim();
+  try{ready ||=host.hasKey(input('deepseek-base').value);}catch{}
+  $('fallback-status').textContent=primary==='codex'&&input('auto-fallback').checked?
+    ready?'自动切换配置就绪':'自动切换需要先保存 DeepSeek API Key':'';
+}
+async function persistSettings(remove?:ProviderName) {
+  const profiles=Object.fromEntries(Object.entries(profileIDs).map(([name,ids])=>[name,{baseURL:input(ids.base).value.trim(),model:input(ids.model).value.trim()}])) as Record<ProviderName,ModelEndpoint>;
+  const primary=input('primary-provider').value as ProviderName;
+  const settings=resolveSettings({...profiles[primary],prompt:area('prompt').value,routing:{primary,autoFallback:input('auto-fallback').checked,...profiles}});
+  const keys=Object.fromEntries(Object.entries(profileIDs).map(([name,ids])=>[name,input(ids.key).value.trim()]));
+  await host.saveSettings(settings,keys,remove||false);
+  for(const ids of Object.values(profileIDs))input(ids.key).value='';
+  showSettings();
   return settings;
 }
 async function provider(signal: AbortSignal) {
@@ -60,14 +100,28 @@ async function provider(signal: AbortSignal) {
     ($('settings-panel') as HTMLDetailsElement).open = true;
     throw new Error('请先填写当前模型端点的 API Key。');
   }
-  return { client: new Provider(settings, key, signal,request=>{requestState=request;requestStarted=Date.now();tickProgress();}), settings };
+  const routing=resolveSettings(settings).routing;
+  $('provider-status').textContent=`首选服务：${PROVIDER_LABELS[routing.primary]}${routing.primary==='codex'&&routing.autoFallback?' · 额度受限时自动使用 DeepSeek':''}`;
+  return { client: new Provider(settings, key, signal,(request,requestId='request')=>{
+    if(request){
+      const previous=requestStates.get(requestId);
+      requestStates.set(requestId,{state:request,started:previous&&previous.state.provider===request.provider&&previous.state.phase===request.phase&&previous.state.attempt===request.attempt?previous.started:Date.now()});
+    } else requestStates.delete(requestId);
+    tickProgress();
+  },{name:routing.primary,...(routing.primary==='codex'&&routing.autoFallback?{
+    fallback:{settings:{...routing.deepseek,prompt:settings.prompt},key:host.apiKey(routing.deepseek.baseURL)},
+    onFallback:()=>{$('provider-status').textContent='Codex 额度受限，已自动切换到 DeepSeek；本次任务后续请求使用 DeepSeek。';}
+  }:{})}), settings };
 }
 const labels: Record<Kind,string> = { body:'正文', heading:'标题', figure:'图', caption:'图注 / 表注', table:'表格', math:'公式', code:'代码', reference:'参考文献', keep:'保留英文' };
+const needsReview=(block:Block)=>!(block.frontMatter&&block.kind==='keep')&&(!!block.translationNeedsRefresh||mathReviewRequired(block));
 function updateControls() {
   document.body.classList.toggle('busy', busy);
-  for (const id of actions) ($<HTMLButtonElement>(id)).disabled = busy || (!project && !['save-settings','delete-key','import-settings'].includes(id));
+  for (const id of actions) ($<HTMLButtonElement>(id)).disabled = busy || (!project && !settingActions.includes(id));
   ($<HTMLButtonElement>('cancel')).disabled = !busy;
-  for (const id of ['kind','translation','terms','base','model','key','prompt','appendix','make-preferred']) (input(id)).disabled = busy || (!project && !['base','model','key','prompt'].includes(id));
+  const settingFields=['primary-provider','auto-fallback','prompt',...Object.values(profileIDs).flatMap(ids=>[ids.base,ids.model,ids.key])];
+  for (const id of ['kind','translation','terms','make-preferred',...settingFields]) (input(id)).disabled = busy || (!project && !settingFields.includes(id));
+  configurationView();
   area('translation').disabled = busy || !selected || !canTranslate(selected);
   $<HTMLButtonElement>('retranslate').disabled = busy || !selected || !canTranslate(selected);
 }
@@ -77,14 +131,19 @@ function list() {
   const translatable = project.blocks.filter(canTranslate);
   const translated = translatable.filter(b => b.translation.trim()).length;
   $('project-summary').textContent = `已翻译 ${translated}/${translatable.length} 段 · 保留原文 ${project.blocks.length-translatable.length} 个区域`;
+  const inlineCount=project.blocks.reduce((n,b)=>n+(b.frontMatter&&b.kind==='keep'?0:b.mathSpans?.length||0),0),displayCount=project.blocks.filter(b=>b.kind==='math').length;
+  const reviewCount=project.blocks.filter(needsReview).length;
+  $('math-summary').textContent=`数学表达：行内 ${inlineCount} 处、独立公式 ${displayCount} 处 · 原文保真 · ${reviewCount} 段公式或格式需复核`;
   const filter = ($<HTMLSelectElement>('filter')).value;
   for (const b of project.blocks) {
     if ((filter === 'pending' && (!canTranslate(b) || !!b.translation.trim())) ||
       (filter === 'editable' && !canTranslate(b)) || (filter === 'keep' && canTranslate(b))) continue;
+    if(filter==='math-review'&&!needsReview(b))continue;
     const button = document.createElement('button');
     button.classList.toggle('current', b.id === selected?.id);
     const meta = document.createElement('span'); meta.className = 'block-meta';
-    meta.textContent = `${b.id} · p.${b.rects[0]?.[0]+1} · ${labels[b.kind]} · ${canTranslate(b) ? (b.edited ? '已修订' : b.translation ? '已翻译' : '待翻译') : '原文'}`;
+    const state=needsReview(b)?'格式需复核':b.edited?'已修订':b.translation?'已翻译':'待翻译';
+    meta.textContent = `${b.id} · p.${b.rects[0]?.[0]+1} · ${b.frontMatter&&b.kind==='keep'?'作者信息（仅左侧）':labels[b.kind]} · ${canTranslate(b) ? state : '原文'}`;
     const excerpt = document.createElement('span'); excerpt.textContent = b.source.slice(0,90) || '[PDF 图形区域]';
     button.append(meta, excerpt); button.addEventListener('click', () => select(b)); root.appendChild(button);
   }
@@ -95,7 +154,7 @@ function select(block: Block) {
   area('source').value = block.source;
   area('translation').value = block.translation;
   ($<HTMLSelectElement>('kind')).value = block.kind;
-  $('edit-status').textContent = block.edited ? '人工修订会保留' : '';
+  $('edit-status').textContent = block.frontMatter&&block.kind==='keep'?'作者信息仅保留在左侧原页，不参与翻译；已有译文缓存保留。':needsReview(block) ? '本段公式或格式需复核。无法确认公式对应时，PDF 保留原文；可用 LaTeX 修订，或重新翻译本段。' : block.edited ? '人工修订会保留' : '';
   list(); updateControls();
 }
 function refresh() {
@@ -126,7 +185,8 @@ function changed() {
 async function run(job: (signal: AbortSignal) => Promise<void>) {
   if (busy) return;
   busy = true; abort = new AbortController();
-  started=Date.now();requestState=null;phase('准备任务');status('正在准备任务…');
+  started=Date.now();requestStates.clear();phase('准备任务');status('正在准备任务…');
+  $('provider-status').textContent='本次任务尚未请求模型。';
   $('task-progress').setAttribute('data-busy','true');tickProgress();
   progressTimer=setInterval(tickProgress,1000);
   updateControls();
@@ -138,7 +198,7 @@ async function run(job: (signal: AbortSignal) => Promise<void>) {
   } catch (e: any) {
     status(e.name === 'AbortError' ? '已取消。已完成段落已保存，可继续翻译。' : e.message || '操作失败。', e.name !== 'AbortError');
   } finally {
-    release?.();busy=false;abort=undefined;requestState=null;
+    release?.();busy=false;abort=undefined;requestStates.clear();
     clearInterval(progressTimer);progressTimer=undefined;tickProgress();
     $('task-progress').setAttribute('data-busy','false');refresh();
   }
@@ -147,12 +207,15 @@ function bind(id: string, fn: () => void | Promise<void>) {
   $(id).addEventListener('click', () => { Promise.resolve().then(fn).catch(e => status(e.message,true)); });
 }
 bind('save-settings', async () => { await persistSettings(); status('模型设置已保存。'); });
-bind('delete-key', async () => { await persistSettings(true); status('已删除当前端点的 Key。'); });
-bind('import-settings', async () => {
-  const result = await host.importHJFYSettings(); showSettings();
-  status(result.importedKey ? '已导入幻觉翻译的模型与 Key，Key 未显示。' : '已导入模型配置，请补充 API Key。');
+bind('use-codex-proxy',()=>{
+  input('codex-base').value=CODEX_DEFAULT.baseURL;input('codex-model').value=CODEX_DEFAULT.model;input('codex-key').value='';
+  input('primary-provider').value='codex';configurationView();
+  status('已填写本机代理。请先启动配套代理脚本，再点击「保存设置」。');
 });
-bind('save-edit', async () => { await save(); status('修订已保存；点击生成 PDF 即可重排。'); });
+bind('delete-key', async () => { await persistSettings('custom'); status('已删除自定义端点的 Key。'); });
+bind('delete-codex-key', async () => { await persistSettings('codex'); status('已删除 Codex 端点的 Key。'); });
+bind('delete-deepseek-key', async () => { await persistSettings('deepseek'); status('已删除 DeepSeek 端点的 Key。'); });
+bind('save-edit', async () => { await save(); status('修订已保存；点击「翻译并生成 PDF」可更新阅读副本。'); });
 bind('cancel', () => { abort?.abort(); status('正在取消当前任务；已保存的译文会保留…'); });
 async function identifyTerms(client: Provider) {
   const saved=project!.terminologyBatches || [];
@@ -190,12 +253,49 @@ async function translateRemaining(client: Provider, settings: Settings, signal: 
   const total=project!.blocks.filter(canTranslate).length;
   const initial=total-pending.length;
   phase('逐段翻译',initial,total,'段');
-  for (let i = 0; i < pending.length; i++) {
-    signal.throwIfAborted();phase('逐段翻译',initial+i,total,'段');status(`正在翻译第 ${initial+i+1}/${total} 段 · ${pending[i].id}`);
-    recordTranslation(pending[i], await client.translate(pending[i],project!),settings);
-    await save();list();phase('逐段翻译',initial+i+1,total,'段');
+  const concurrency=Math.min(TRANSLATION_CONCURRENCY,pending.length);
+  let next=0,completed=initial,failed=false,firstError:any;
+  const active=new Set<string>();
+  const paragraphFailures=new Map<string,string>();
+  const updateProgress=()=>{
+    phase('逐段翻译',completed,total,'段');
+    status(`并行翻译 ${active.size}/${concurrency} · 已完成 ${completed}/${total} 段${paragraphFailures.size?` · ${paragraphFailures.size} 段待重试`:''}${active.size?` · 正在处理 ${[...active].join('、')}`:''}`);
+  };
+  const worker=async()=>{
+    while(!failed){
+      try { signal.throwIfAborted(); }
+      catch(error) { if(!failed){failed=true;firstError=error;} return; }
+      const index=next++;
+      if(index>=pending.length)return;
+      const block=pending[index];
+      active.add(block.id);updateProgress();
+      try {
+        const translation=await client.translate(block,project!);
+        recordTranslation(block,translation,settings);
+        revision++;dirty=true;
+        await save();
+        completed++;list();
+      } catch(error:any) {
+        if(error?.code==='PW_PROTECTION_INVALID')paragraphFailures.set(block.id,error.message);
+        else {
+          if(!failed){failed=true;firstError=error;}
+          if(error?.name!=='AbortError')status(`${block.id} 翻译失败；正在保存其他已完成段落…`,true);
+        }
+      } finally {
+        active.delete(block.id);updateProgress();
+      }
+    }
+  };
+  await Promise.all(Array.from({length:concurrency},()=>worker()));
+  if(failed)throw firstError;
+  if(paragraphFailures.size)throw new Error(`已保存 ${completed}/${total} 段；${[...paragraphFailures.keys()].join('、')} 共 ${paragraphFailures.size} 段保护标记校验未通过，译文未覆盖。其他段落已处理完；再次点击只重试未完成段落，或选择对应段落修订。本次未生成 PDF。`);
+  if(pending.length===0)updateProgress();
+  else phase('逐段翻译',completed,total,'段');
+  if (pending.length) {
+    status(`翻译完成，共 ${pending.length} 段。可逐段修订，或生成 PDF。`);
+  } else {
+    status('所有正文段落均已有译文。');
   }
-  status(pending.length ? `翻译完成，共 ${pending.length} 段。可逐段修订，或生成 PDF。` : '所有正文段落均已有译文。');
 }
 bind('translate', () => run(async signal => {
   const { client, settings } = await provider(signal);
@@ -210,40 +310,50 @@ bind('retranslate', () => run(async signal => {
   await save(); status('本段已重新翻译并保存。');
 }));
 async function generatePDF(signal: AbortSignal) {
+  const mathReview=new Set<string>();
   phase('准备 PDF 排版');
   status('正在准备 PDF 排版…');
   const bytes = await host.sourceBytes(host.item,project);
   const font = await host.fontBytes();
   const monoFont = await host.monoFontBytes();
-  const rasterize = await host.sourceRenderer(host.item,signal);
-  const output = await render(project!, new Uint8Array(bytes), new Uint8Array(font), input('appendix').checked, signal,message=>{
-    const step=message.match(/^(保留原文区域|60\/40 逐段排版) (\d+)\/(\d+)/);
-    if(step)phase(step[1],Number(step[2])-1,Number(step[3]),'个');else phase('写入 PDF');
+  const output = await render(project!, new Uint8Array(bytes), new Uint8Array(font), false, signal,message=>{
+    const step=message.match(/^(60\/40 逐页排译) (\d+)\/(\d+)/);
+    if(step)phase(step[1],Number(step[2])-1,Number(step[3]),'页');else phase('写入 PDF');
     status(message);
-  },
-    undefined,{monoFontBytes:new Uint8Array(monoFont),rasterize});
+  },{monoFontBytes:new Uint8Array(monoFont),onPlacement:p=>{
+    if(p.mathReview){mathReview.add(p.blockID);const block=project!.blocks.find(b=>b.id===p.blockID);if(block)block.translationNeedsRefresh=true;}
+  }});
   signal.throwIfAborted();
   phase('保存 Zotero 附件');status('PDF 排版完成，正在保存并打开附件…');
   const result = await host.attachPDF(host.item,project,output,input('make-preferred').checked);
   status(result.preferenceError ? `双语 PDF 已生成。优先打开未生效：${result.preferenceError}` :
-    result.preferredSet ? '已生成 60/40 双语 PDF，并设为这篇论文优先打开的附件。' : '已生成 60/40 双语 PDF，并在 Zotero 中打开。');
+    result.preferredSet ? '已生成原文 60% / 中文 40% 的双语 PDF，并设为这篇论文优先打开的附件。' : '已生成原文 60% / 中文 40% 的双语 PDF，并在 Zotero 中打开。');
+  if(mathReview.size)status(`PDF 已生成；${mathReview.size} 段公式对应需复核，本次保留原文。可在「公式 / 格式需复核」中修订。`);
 }
-bind('generate', () => run(generatePDF));
 bind('prefer-original', () => run(async () => { await host.preferOriginal(host.item); status('这篇论文已改为优先打开原文。'); }));
 bind('start', () => run(async signal => {
-  const { client, settings } = await provider(signal);
-  await translateRemaining(client, settings, signal);
+  if(project!.blocks.some(block=>canTranslate(block)&&!block.translation.trim())) {
+    const { client, settings } = await provider(signal);
+    await translateRemaining(client, settings, signal);
+  }
   await generatePDF(signal);
 }));
 bind('export', () => run(async () => { await host.exportProject(window, project); status('导出操作完成。项目包含论文文本，请按需要保管。'); }));
 bind('import', () => run(async () => { const p = await host.importProject(window,host.item,project); if (p) { project = p; status('已导入修订；可以重新生成 PDF。'); } }));
 $('filter').addEventListener('change', list);
-$('translation').addEventListener('input', () => { if (selected) { selected.translation = area('translation').value; selected.edited = true; changed(); } });
-$('kind').addEventListener('change', () => { if (selected) { selected.kind = ($<HTMLSelectElement>('kind')).value as Kind; changed(); list(); updateControls(); } });
-input('base').addEventListener('change', () => {
-  try { $('key-status').textContent = host.hasKey(input('base').value) ? '此端点已保存 Key' : '此端点未保存 Key'; }
-  catch { $('key-status').textContent = 'Base URL 无效'; }
-});
+$('translation').addEventListener('input', () => { if (selected) {
+  const updated=area('translation').value;
+  selected.translationBoldRanges=remapTextRanges(selected.translation,updated,selected.translationBoldRanges);
+  selected.translationMathRefs=remapTextRanges(selected.translation,updated,selected.translationMathRefs);
+  selected.translation=updated;selected.edited=true;selected.translationNeedsRefresh=false;changed();
+} });
+$('kind').addEventListener('change', () => { if (selected) { selected.kind = ($<HTMLSelectElement>('kind')).value as Kind; selected.kindEdited=true; changed(); list(); updateControls(); } });
+for(const ids of Object.values(profileIDs)){
+  input(ids.base).addEventListener('change',configurationView);
+  input(ids.key).addEventListener('input',configurationView);
+}
+input('primary-provider').addEventListener('change',configurationView);
+input('auto-fallback').addEventListener('change',configurationView);
 window.addEventListener('beforeunload', event => {
   if (busy || dirty) { event.preventDefault(); event.returnValue = ''; }
 });
@@ -260,7 +370,11 @@ window.addEventListener('unload', () => { abort?.abort(); clearTimeout(autosave)
     phase('读取 PDF 项目');status('正在读取论文项目…');
     project = await host.loadProject(host.item,status,signal);
     status(`已载入 ${project!.blocks.length} 个区域；请先复核分类。`);
-    if (project!.pages.some(p => p.extractionDegraded)) status('部分页面的版面分析已降级，请与原文逐页复核，并保留原文附录。');
+    if (project!.pages.some(p => p.extractionDegraded)) status('部分页面的版面分析已降级，请对照左侧原页逐项复核。');
+    const refreshCount=project!.blocks.filter(needsReview).length;
+    if(refreshCount)status(`结构升级已保留已有译文；${refreshCount} 段旧译文需按新格式重译或手动复核。已修订段落不会自动覆盖。`);
+    if(project!.extractionUpgradeAttempted===EXTRACTION_VERSION && project!.extractionVersion!==EXTRACTION_VERSION)
+      status('未能安全更新旧项目的段落结构，原项目与译文均已保留。');
   });
   if (!host.hasKey(host.settings().baseURL)) ($('settings-panel') as HTMLDetailsElement).open = true;
 }

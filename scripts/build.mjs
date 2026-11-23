@@ -18,7 +18,7 @@ await build({ entryPoints:['src/workbench.ts'], outfile:join(stage,'chrome/conte
 await cp('LICENSE',join(stage,'LICENSE'));
 await cp('THIRD_PARTY_NOTICES.md',join(stage,'THIRD_PARTY_NOTICES.md'));
 // Include exact dependency licenses for every bundled runtime package.
-for (const name of ['pdf-lib','@pdf-lib/fontkit','@pdf-lib/standard-fonts','@pdf-lib/upng','pako','tslib']) {
+for (const name of ['pdf-lib','@pdf-lib/fontkit','@pdf-lib/standard-fonts','@pdf-lib/upng','pako','tslib','mathjax-full']) {
   const dir=join('node_modules',name);
   const license=(await readdir(dir)).find(n=>/^licen[sc]e(?:\.|$)/i.test(n));
   const dest=join(stage,'licenses',name.replaceAll('/','-')+'.txt');
@@ -58,7 +58,12 @@ end.writeUInt16LE(central.length/2,8);end.writeUInt16LE(central.length/2,10);end
 const archive=Buffer.concat([...local,cd,end]);
 const name=`paperweave-${pkg.version}.xpi`;
 await writeFile(join('dist',name),archive);
-await writeFile('dist/SHA256SUMS',`${createHash('sha256').update(archive).digest('hex')}  ${name}\n`);
+await cp('scripts/codex-proxy.mjs','dist/paperweave-codex-proxy.mjs');
+await cp('docs/CODEX_PROXY.zh-CN.md','dist/CODEX_PROXY.zh-CN.md');
+const checksums=[];
+for(const file of [name,'paperweave-codex-proxy.mjs','CODEX_PROXY.zh-CN.md'])
+  checksums.push(`${createHash('sha256').update(await readFile(join('dist',file))).digest('hex')}  ${file}`);
+await writeFile('dist/SHA256SUMS',checksums.join('\n')+'\n');
 const update={ addons:{ [manifest.applications.zotero.id]:{ updates:[{
   version:pkg.version,update_link:`https://github.com/alan-hpc/zotero-paper-weave/releases/download/v${pkg.version}/${name}`,
   applications:{ zotero:{ strict_min_version:'10.0',strict_max_version:'10.*' } }

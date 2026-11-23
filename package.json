@@ -1,6 +1,6 @@
 {
   "name": "zotero-paper-weave",
-  "version": "0.1.0-alpha.14",
+  "version": "0.1.0-alpha.34",
   "private": true,
   "description": "Editable paragraph bilingual PDFs for Zotero 10",
   "license": "MIT",
@@ -10,10 +10,12 @@
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck",
     "package": "npm run build",
-    "test": "node scripts/smoke.mjs"
+    "test": "node scripts/smoke.mjs",
+    "proxy:codex": "node scripts/codex-proxy.mjs"
   },
   "dependencies": {
     "@pdf-lib/fontkit": "1.1.1",
+    "mathjax-full": "3.2.2",
     "pdf-lib": "1.17.1"
   },
   "devDependencies": {

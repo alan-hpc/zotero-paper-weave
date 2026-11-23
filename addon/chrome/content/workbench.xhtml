@@ -12,42 +12,62 @@
   </header>
   <details id="settings-panel">
     <summary>模型与翻译偏好</summary>
-    <div class="settings-grid">
+    <div class="row">
+      <label class="inline">首选服务 <select id="primary-provider"><option value="codex">Codex</option><option value="deepseek">DeepSeek API</option><option value="custom">其他兼容 API</option></select></label>
+      <label class="inline"><input id="auto-fallback" type="checkbox" />Codex 额度受限时自动切换到 DeepSeek</label>
+    </div>
+    <p class="hint">两套设置分别保存。自动切换会将尚未完成的术语或段落发送到 DeepSeek API，并按其账户计费；已有译文继续使用缓存。</p>
+    <fieldset class="provider-profile"><legend>Codex</legend><div class="settings-grid">
+      <label>Codex Base URL<input id="codex-base" type="url" placeholder="http://127.0.0.1:47771/v1" /></label>
+      <label>Codex 模型<input id="codex-model" type="text" placeholder="codex-local" /></label>
+      <label>Codex API Key（本机代理留空）<input id="codex-key" type="password" autocomplete="off" /></label>
+    </div><div class="row"><button id="use-codex-proxy" class="subtle">填写本机 Codex 代理</button><button id="delete-codex-key" class="subtle">删除 Codex Key</button><span id="codex-key-status"></span></div></fieldset>
+    <fieldset class="provider-profile"><legend>DeepSeek API</legend><div class="settings-grid">
+      <label>DeepSeek Base URL<input id="deepseek-base" type="url" placeholder="https://api.deepseek.com/v1" /></label>
+      <label>DeepSeek 模型<input id="deepseek-model" type="text" placeholder="deepseek-flash" /></label>
+      <label>DeepSeek API Key<input id="deepseek-key" type="password" autocomplete="off" /></label>
+    </div><div class="row"><button id="delete-deepseek-key" class="subtle">删除 DeepSeek Key</button><span id="deepseek-key-status"></span></div></fieldset>
+    <fieldset id="custom-profile" class="provider-profile"><legend>其他兼容 API</legend><div class="settings-grid">
       <label>API Base URL<input id="base" type="url" placeholder="https://api.deepseek.com/v1" /></label>
       <label>模型名称<input id="model" type="text" placeholder="deepseek-flash" /></label>
       <label>API Key<input id="key" type="password" autocomplete="off" placeholder="留空可使用本地无密钥服务" /></label>
-    </div>
+    </div><div class="row"><button id="delete-key" class="subtle">删除此端点的 Key</button><span id="key-status"></span></div></fieldset>
     <label>补充翻译偏好（可选）<textarea id="prompt" rows="2" placeholder="例如：行文简洁，保留原文中的所有符号。"></textarea></label>
-    <div class="row"><button id="save-settings">保存设置</button><button id="import-settings">从幻觉翻译导入配置与 Key</button><button id="delete-key" class="subtle">删除此端点的 Key</button><span id="key-status"></span></div>
-    <p class="hint">点击识别术语或翻译会将对应论文文本发送到此端点，并可能产生费用。Key 存于 Zotero 凭据管理器；不会写入翻译项目或 PDF。</p>
+    <div class="row"><button id="save-settings">保存全部设置</button><span id="fallback-status"></span></div>
+    <p class="hint">本机 Codex 代理需保持配套脚本运行。codex-local 使用 CLI 默认模型，也可填写具体模型 ID；Key 留空，使用 Codex 的 ChatGPT 登录。每次新任务优先尝试 Codex；额度受限后本次任务后续请求使用 DeepSeek。</p>
+    <p class="hint">普通排队、临时限速和网络错误会有限重试，不触发额度切换。Key 存于 Zotero 凭据管理器；不会写入翻译项目或 PDF。</p>
   </details>
   <nav aria-label="翻译操作">
     <button id="start" class="primary">翻译并生成 PDF</button>
-    <button id="generate">保存新版 PDF（本地重排）</button><button id="cancel" disabled="disabled">取消</button>
+    <button id="cancel" disabled="disabled">取消</button>
   </nav>
   <section id="task-progress" data-busy="false" aria-label="任务进度">
     <div id="status" role="status" aria-live="polite">准备中…</div>
+    <p id="provider-status" class="hint" role="status" aria-live="polite"></p>
     <div class="progress-track"><span id="progress-detail"></span><progress id="job-progress" max="1" value="0" aria-label="当前阶段进度"></progress></div>
     <div class="progress-meta"><span id="request-detail"></span><span id="progress-time"></span></div>
   </section>
-  <p class="hint">排版 B · 英文左侧 60% / 中文右侧 40% · 正文两端对齐，段末左对齐 · 中间竖线</p>
+  <p class="hint">排版 B · 原文左侧 60% / 中文右侧 40% · 正文两端对齐，段末左对齐 · 中间竖线</p>
+  <p class="hint">作者、单位、邮箱与通讯作者说明仅保留在左侧原页，不参与正文翻译；已有译文缓存保留。需要翻译某个区域时，可手动改为正文。</p>
+  <p class="hint">图表、图注与表注整组保留原文，和公式一起插入右栏；空间不足时整组续页。修订后点击「保存修订」；需要更新 PDF 时点击「翻译并生成 PDF」，已有译文直接使用缓存。</p>
   <p class="hint">字体：正文与英文术语使用思源宋体 · 行内代码使用更纱等宽字体</p>
   <p id="project-summary" class="hint">尚未载入翻译项目</p>
+  <p id="math-summary" class="hint">数学表达正在识别…</p>
   <details><summary>分步操作：词表与翻译</summary><div class="row"><button id="terms-action">识别本文术语</button><button id="translate">仅翻译未完成段落</button></div><p class="hint">也可以先复核词表再翻译。「翻译并生成 PDF」会自动识别术语、翻译剩余段落并导入附件；已有译文会保留。</p></details>
   <p class="notice">版面识别可能有误。请复核正文与图表分类；图表、图注、表格、公式、代码及参考文献默认保留原文。扫描件需先 OCR。</p>
   <main>
-    <aside><div class="list-heading"><strong>段落</strong><select id="filter" aria-label="筛选段落"><option value="all">全部</option><option value="pending">未翻译</option><option value="editable">正文 / 标题</option><option value="keep">保留英文</option></select></div><div id="block-list"></div></aside>
+    <aside><div class="list-heading"><strong>段落</strong><select id="filter" aria-label="筛选段落"><option value="all">全部</option><option value="pending">未翻译</option><option value="editable">正文 / 标题</option><option value="math-review">公式 / 格式需复核</option><option value="keep">保留英文</option></select></div><div id="block-list"></div></aside>
     <section class="editor">
       <div class="row"><strong id="block-title">请选择段落</strong><label class="inline">区域类型 <select id="kind"><option value="body">正文（翻译）</option><option value="heading">标题（翻译）</option><option value="figure">图（原文）</option><option value="caption">图注 / 表注（原文）</option><option value="table">表格（原文）</option><option value="math">公式（原文）</option><option value="code">代码（原文）</option><option value="reference">参考文献（原文）</option><option value="keep">其他（保留英文）</option></select></label></div>
       <label class="area">英文原文<textarea id="source" readonly="readonly" spellcheck="false"></textarea></label>
       <label class="area">中文译文（可以直接修改）<textarea id="translation" spellcheck="false" placeholder="生成译文后可在此修订；原文保留区域无需填写。"></textarea></label>
+      <p class="hint">原论文公式保留原始字形与二维结构。手工修订支持 LaTeX，例如 <code>\(R_1^T\)</code>、<code>\(\frac{x}{y}\)</code>；生成 PDF 时离线排版。</p>
       <div class="row"><button id="save-edit">保存修订</button><button id="retranslate">重新翻译本段（覆盖）</button><span id="edit-status"></span></div>
     </section>
   </main>
   <details id="terms-panel"><summary>本文术语表（每行一个；保留英文原样）</summary><textarea id="terms" rows="6" spellcheck="false"></textarea><p class="hint">自动识别后可增删。变更词表会用于之后的翻译；已有译文需选择对应段落重新翻译。每篇论文使用独立词表。</p><button id="save-terms">保存词表</button></details>
   <footer>
     <label class="inline"><input id="make-preferred" type="checkbox" checked="checked" />生成后优先打开双语 PDF</label>
-    <label class="inline"><input id="appendix" type="checkbox" checked="checked" />附加完整原 PDF，便于复核遗漏</label>
     <div class="row"><button id="prefer-original">优先打开原文</button><button id="export">导出修订项目</button><button id="import">导入修订项目（覆盖译文）</button></div>
     <p class="hint">项目自动保存在本机 Zotero 数据目录，默认不随 Zotero 同步。每次生成新 PDF 附件；旧版批注不会自动迁移。</p>
     <p class="hint">优先打开选择保存在本机，重启后保留；停用插件后使用 Zotero 默认顺序。原文附件始终保留。</p>

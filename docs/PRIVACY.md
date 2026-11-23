@@ -14,13 +14,34 @@ The project folder is not automatically synced by PaperWeave.
 Clicking terminology extraction sends translatable text in bounded chunks to the configured API.
 Clicking translation sends individual paragraphs, protected term data, and the paper title.
 Custom prompt preferences are included in translation requests. No PDF binary or images are sent.
+Detected author metadata is excluded from terminology and translation requests by default and
+remains on the original PDF page. Users can explicitly classify a region as body text to translate it.
 The selected provider controls retention, billing and use of those requests. PaperWeave cannot
 change provider policies. Users must select an appropriate endpoint for their documents.
+
+When the user enables Codex quota fallback, a failed terminology batch or paragraph is sent to
+the separately configured DeepSeek endpoint after an explicit Codex quota error. Subsequent model
+requests in that task also use DeepSeek and are billed by that API account. Cached translations
+are retained. Temporary rate limits, local queueing, network and authentication failures do not
+initiate fallback. Disabling the checkbox prevents automatic cross-provider requests.
 
 API credentials are stored in Zotero Login Manager, scoped to the exact endpoint. They are read
 only for API requests, sent as an Authorization header, and are never placed in project exports,
 PDFs, normal error messages or logs by PaperWeave. Login Manager protection depends on the user's
 Zotero/OS setup; this project does not promise an additional encryption layer.
+
+## Optional local Codex proxy
+
+The optional helper listens on 127.0.0.1 and forwards only text translation/terminology tasks to
+the official Codex CLI. Codex manages its saved ChatGPT authentication; PaperWeave does not read,
+copy or export the authentication file. API-key environment overrides are removed from the child
+process and the helper requires ChatGPT login. Account plan limits and Codex workspace policies
+apply. This does not reuse a current chat's history or custom-GPT knowledge.
+
+The helper does not log request bodies or credentials. It creates a temporary output-schema file,
+uses ephemeral CLI sessions with translation-unneeded tools disabled, and removes its temporary
+directory afterward. Codex's own authentication/runtime state and provider data handling remain
+controlled by Codex and the selected account. The helper is not designed as a public service.
 
 ## Other network activity
 

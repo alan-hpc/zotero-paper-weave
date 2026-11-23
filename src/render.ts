@@ -1,10 +1,15 @@
-import { PDFDocument, PDFEmbeddedPage, PDFImage, PDFFont, PDFPage, rgb, StandardFonts } from 'pdf-lib';
+import { PDFDocument, PDFEmbeddedPage, PDFFont, PDFPage, rgb, StandardFonts, pushGraphicsState, popGraphicsState, rectangle, clip, endPath } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
-import { Block, Project, canTranslate } from './model';
-import { StyledLine, styledRuns, withFontFallback, wrapStyled, positionLine } from './typography';
+import { Block, Project, ListInfo, canTranslate } from './model';
+import { StyledLine, OriginalMathMetrics, styledRuns, withFontFallback, wrapStyled, positionLine } from './typography';
 import { bounded } from './async';
+import { translatedBoldRanges } from './formatting';
+import { graphicGroups, GraphicGroup } from './graphics';
+import { listInfo, listText } from './lists';
+import { inlineMathText, mathReviewRequired } from './inlineMath';
+import { latexBox, drawLatex } from './latex';
 
-/** Design B: the divider partitions the usable page width at exactly 60/40. */
+/** Design B: keep each complete source page on the left, with translation on the right. */
 export const LAYOUT = {
   width: 1190.55, height: 841.89, margin: 34, gutter: 18,
   englishRatio: .60, chineseRatio: .40, top: 740, bottom: 48
@@ -12,206 +17,360 @@ export const LAYOUT = {
 const DIV = LAYOUT.margin + (LAYOUT.width - LAYOUT.margin * 2) * LAYOUT.englishRatio;
 const EX = LAYOUT.margin + 17, ZX = DIV + LAYOUT.gutter;
 const EW = DIV - LAYOUT.gutter - EX, ZW = LAYOUT.width - LAYOUT.margin - ZX;
-const GAP = 18, LEAD_EN = 15.5, LEAD_ZH = 16.4, HEADROOM = 6;
-const USABLE = LAYOUT.top - LAYOUT.bottom - GAP - HEADROOM;
+const GAP = 8, LEAD_ZH = 16.4, HEADROOM = 6;
+const TEXT_HEIGHT = LAYOUT.top - LAYOUT.bottom - HEADROOM;
 const ink = rgb(.09,.17,.22), blue = rgb(.14,.30,.38), grey = rgb(.40,.47,.52);
 const rule = rgb(.68,.75,.79), faint = rgb(.88,.91,.92);
-export interface Placement {
-  blockID: string; pageIndex: number; continued: boolean; top: number;
-  english: { x: number; width: number; height: number };
-  chinese: { x: number; width: number; height: number };
-}
-interface Snippet { blockID:string;sourcePage: number; box: { left: number; bottom: number; right: number; top: number }; width: number; height: number; embedded?: PDFEmbeddedPage; image?:PDFImage }
-interface EnglishLine { text: string; paragraphEnd: boolean }
-interface Plan { block: Block; en: EnglishLine[]; zh: StyledLine[]; snippets: Snippet[]; enSize: number; zhSize: number; enLead: number; zhLead: number; enFont: PDFFont }
-export interface RenderOptions { monoFontBytes?:Uint8Array; rasterize?:(pageIndex:number,box:Snippet['box'],signal:AbortSignal,notice:(message:string)=>void)=>Promise<Uint8Array> }
 
-export function wrap(text: string, font: PDFFont, size: number, width: number): string[] {
-  const output: string[] = [];
-  const measure = (s: string) => font.widthOfTextAtSize(s, size);
-  for (const paragraph of text.replace(/\r\n?/g,'\n').replace(/\t/g,'    ').split('\n')) {
-    if (!paragraph) { output.push(''); continue; }
-    const tokens = paragraph.match(/[A-Za-z0-9_]+(?:[.'’/\-][A-Za-z0-9_]+)*|\s+|[^\s]/gu) || [];
-    let line = '';
-    for (const token of tokens) {
-      if (measure(line + token) <= width) { line += token; continue; }
-      if (/^[，。；：？！、）》】〕〉”’]$/.test(token) && line) {
-        const tail = line.match(/(?:[A-Za-z0-9_]+|.)$/u)?.[0] || '';
-        const before = line.slice(0, -tail.length);
-        if (before.trim() && measure(tail + token) <= width) {
-          output.push(before.trimEnd()); line = tail + token; continue;
-        }
-      }
-      let carry = '';
-      if (/[（《【〔〈“‘]$/.test(line)) { carry = line.slice(-1); line = line.slice(0,-1); }
-      if (line.trim()) output.push(line.trimEnd());
-      line = carry;
-      const next = token.trimStart();
-      if (measure(line + next) > width) {
-        for (const char of next) {
-          if (line && measure(line + char) > width) { output.push(line); line = ''; }
-          line += char;
-        }
-      } else line += next;
-    }
-    if (line.trim()) output.push(line.trimEnd());
-  }
-  return output;
+interface TranslationPlan {
+  kind: 'text';
+  block: Block;
+  lines: StyledLine[];
+  size: number;
+  lead: number;
+  list?: ListInfo;
+  markerWidth:number;
+  textInset:number;
+}
+interface OriginalPlan {
+  kind: 'formula'|'graphic';
+  block: Block;
+  blockIDs: string[];
+  groupLabel?: string;
+  image: PDFEmbeddedPage;
+  width: number;
+  height: number;
+  sourceBox: {left:number;bottom:number;right:number;top:number};
+  notice?:string;
+  imageHeight?:number;
+}
+type ContentPlan = TranslationPlan | OriginalPlan;
+interface TextSheetEntry {
+  kind: 'text';
+  plan: TranslationPlan;
+  start: number;
+  end: number;
+  startsBlock: boolean;
+  continued: boolean;
+}
+interface OriginalSheetEntry { kind: 'original'; plan: OriginalPlan }
+type SheetEntry = TextSheetEntry | OriginalSheetEntry;
+interface Sheet {
+  sourcePage: number;
+  continuation: number;
+  entries: SheetEntry[];
+}
+export interface RenderPlacement {
+  kind:'text'|'formula'|'graphic';blockID:string;blockIDs?:string[];groupLabel?:string;sourcePage:number;pageIndex:number;
+  x:number;y:number;width:number;height:number;continued:boolean;
+  sourceBox?:{left:number;bottom:number;right:number;top:number};bold?:boolean;
+  listMarker?:string;listDepth?:number;listMarkerX?:number;
+  mathExpressions?:string[];
+  inlineMathSources?:number[];
+  inlineMathWrapped?:number[];
+  mathReview?:boolean;
+}
+export interface RenderOptions { monoFontBytes?: Uint8Array; onPlacement?:(placement:RenderPlacement)=>void }
+
+function pageCrop(page: PDFPage) {
+  const crop=page.getCropBox();
+  return {left:crop.x,bottom:crop.y,right:crop.x+crop.width,top:crop.y+crop.height};
 }
 
-function needsSourceTypography(block: Block, supported: Set<number>) {
-  if (!canTranslate(block)) return true;
-  if (/[=±×÷∑∏√∫∂∞≈≠≤≥⁰¹²³⁴⁵⁶⁷⁸⁹₀-₉\u0370-\u03ff\u2200-\u22ff]/u.test(block.source)) return true;
-  return [...block.source.normalize('NFKC')].some(c => !/[\n\r\t]/.test(c) && !supported.has(c.codePointAt(0)!));
-}
-
-/** B layout. Reflow prose and retain protected original regions without translating them. */
+/** Keep every original PDF page intact; compose editable translations by source page and paragraph order. */
 export async function render(project: Project, sourceBytes: Uint8Array, fontBytes: Uint8Array,
   appendix: boolean, signal: AbortSignal, progress: (s: string) => void,
-  onPlacement?: (placement: Placement) => void, options: RenderOptions = {}): Promise<Uint8Array> {
+  options: RenderOptions = {}): Promise<Uint8Array> {
   const incomplete = project.blocks.filter(b => canTranslate(b) && !b.translation.trim());
   if (incomplete.length) throw new Error(`还有 ${incomplete.length} 段未翻译。请完成翻译，或将这些段落设为「保留英文」。`);
   signal.throwIfAborted();
   const source = await PDFDocument.load(sourceBytes);
   if (source.getPageCount() !== project.pages.length) throw new Error('原 PDF 页数与缓存不匹配。');
   const doc = await PDFDocument.create(); doc.registerFontkit(fontkit);
-  // Bundle static TrueType fonts whole; fontkit's subset path drops CJK glyphs.
+  // Embed full static fonts so Chinese, English technical terms and fallback glyphs stay available.
   const zhFont = await doc.embedFont(fontBytes, { subset: false });
   const monoFont = options.monoFontBytes ? await doc.embedFont(options.monoFontBytes,{subset:false,features:{liga:false,clig:false,calt:false}}) : zhFont;
-  // Use the same embedded Latin serif glyphs in English prose and Chinese translations.
-  const english = zhFont;
   const labelFont = await doc.embedFont(StandardFonts.Helvetica);
-  const zhChars = new Set(zhFont.getCharacterSet()), monoChars = new Set(monoFont.getCharacterSet()), enChars = new Set(english.getCharacterSet());
-  const plans: Plan[] = [];
+  const zhChars = new Set(zhFont.getCharacterSet()), monoChars = new Set(monoFont.getCharacterSet());
+  const plansByPage: ContentPlan[][] = project.pages.map(()=>[]);
+  interface MathPart {image:PDFEmbeddedPage;width:number;height:number;offsetX:number;offsetY:number;pageWidth:number;pageHeight:number;targetX:number;targetTop:number}
+  const mathAssets=new Map<string,{parts:MathPart[];metrics:OriginalMathMetrics}>();
+  const embeddedByPage=new Map<number,PDFEmbeddedPage>();
+  let embeddedSource:Promise<PDFEmbeddedPage[]>|undefined;
+  const embeddedPage=async(index:number)=>{
+    const cached=embeddedByPage.get(index);if(cached)return cached;
+    embeddedSource ||= bounded(()=>doc.embedPages(source.getPages(),source.getPages().map(pageCrop)),signal,60000,'载入原文及共享公式字形');
+    const embedded=(await embeddedSource)[index],label=`载入原文第 ${index+1} 页`;
+    if(!(embedded.width>0&&embedded.height>0))throw new Error(`${label} 的版面尺寸无效。`);
+    embeddedByPage.set(index,embedded);return embedded;
+  };
+  const graphics=graphicGroups(project),byAnchor=new Map<string,GraphicGroup[]>();
+  const graphicMembers=new Set(graphics.flatMap(group=>group.blockIDs));
+  for(const group of graphics)byAnchor.set(group.anchorID,[...(byAnchor.get(group.anchorID)||[]),group]);
+
   for (const block of project.blocks) {
     signal.throwIfAborted();
-    const heading = block.kind === 'heading';
-    const p: Plan = { block, en: [], zh: [], snippets: [], enSize: heading ? 12 : 11.1,
-      zhSize: heading ? 11.2 : 10.7, enLead: heading ? 16.4 : LEAD_EN, zhLead: heading ? 16.4 : LEAD_ZH,
-      enFont: english };
-    if (canTranslate(block)) {
-      const runs=withFontFallback(styledRuns(block.translation),zhChars,monoChars);
-      const absent=[...new Set(runs.flatMap(run=>[...run.text].filter(c=>!/[\n\r\t]/.test(c)&&!(run.mono?monoChars:zhChars).has(c.codePointAt(0)!))))];
-      if(absent.length)throw new Error(`${block.id} 含字体不支持的字符：${absent.slice(0,12).join(' ')}。请修订后重排。`);
-      p.zh=wrapStyled(runs,zhFont,monoFont,p.zhSize,ZW);
+    for(const group of byAnchor.get(block.id)||[]) {
+      const pageIndex=group.sourcePage,crop=source.getPage(pageIndex).getCropBox(),pad=3;
+      const box={left:Math.max(crop.x,group.box.left-pad),bottom:Math.max(crop.y,group.box.bottom-pad),
+        right:Math.min(crop.x+crop.width,group.box.right+pad),top:Math.min(crop.y+crop.height,group.box.top+pad)};
+      if(!(box.right>box.left&&box.top>box.bottom))throw new Error(`${block.id} 的图表裁切范围无效。`);
+      const label=`截取原文第 ${pageIndex+1} 页图表 ${group.label||block.id}`;
+      const image=await embeddedPage(pageIndex),imageWidth=box.right-box.left,imageHeight=box.top-box.bottom;
+      if(!(image.width>0&&image.height>0))throw new Error(`${label} 失败。`);
+      // A graphic and its captions move together; scale the complete crop to one reading page.
+      const scale=Math.min((ZW-24)/imageWidth,(TEXT_HEIGHT-GAP*2)/imageHeight,1);
+      plansByPage[pageIndex].push({kind:'graphic',block,blockIDs:group.blockIDs,groupLabel:group.label,
+        image,width:imageWidth*scale,height:imageHeight*scale,sourceBox:box});
     }
-    if (!needsSourceTypography(block,enChars)) {
-      p.en = block.source.normalize('NFKC').replace(/\r\n?/g,'\n').split('\n').flatMap(paragraph=>{
-        const lines=wrap(paragraph,p.enFont,p.enSize,EW);
-        return lines.map((text,i)=>({text,paragraphEnd:i===lines.length-1}));
-      });
-    } else {
-      for (const r of block.rects) {
-        const crop = source.getPage(r[0]).getCropBox();
-        const left = Math.max(crop.x,r[1]-1);
-        // SDT can underestimate the width of full-width small-cap headings.
-        // A symmetric page margin is safe here: a block this wide has no adjacent text column.
-        const wideRight = r[3]-r[1] > crop.width*.7 ? crop.x+crop.width-Math.max(0,left-crop.x-4) : r[3]+1;
-        const right = Math.min(crop.x+crop.width,Math.max(r[3]+1,wideRight));
-        const bottom = Math.max(crop.y,r[2]-1), top = Math.min(crop.y+crop.height,r[4]+1);
-        if (right <= left || top <= bottom) throw new Error(`${block.id} 的裁剪坐标超出原 PDF。`);
-        const scale = Math.min(1.35, EW/(right-left), (USABLE-8)/(top-bottom));
-        p.snippets.push({ blockID:block.id,sourcePage:r[0],box:{left,right,bottom,top},width:(right-left)*scale,height:(top-bottom)*scale });
+    if(graphicMembers.has(block.id))continue;
+    const sourcePage=block.rects[0]?.[0];
+    if ((!canTranslate(block) && block.kind!=='math') || block.rects.length===0) continue;
+    if (!Number.isInteger(sourcePage) || sourcePage! < 0 || sourcePage! >= plansByPage.length) {
+      throw new Error(`${block.id} 缺少有效的原文页码，无法与译文对应。`);
+    }
+    if(block.kind==='math') {
+      const boxes=new Map<number,{left:number;bottom:number;right:number;top:number}>();
+      for(const rect of block.rects) {
+        const pageIndex=rect[0];
+        if(!Number.isInteger(pageIndex)||pageIndex<0||pageIndex>=source.getPageCount())
+          throw new Error(`${block.id} 的公式页码无效。`);
+        const crop=source.getPage(pageIndex).getCropBox(),pad=3;
+        const middle=(rect[1]+rect[3])/2;
+        const nearby=project.blocks.filter(candidate=>candidate.kind==='body').flatMap(candidate=>candidate.rects.map(r=>({rect:r,weight:Math.max(1,candidate.source.length/candidate.rects.length)})))
+          .filter(candidate=>candidate.rect[0]===pageIndex&&candidate.rect[1]<=middle&&candidate.rect[3]>=middle)
+          .map(candidate=>({...candidate,gap:Math.max(0,rect[2]-candidate.rect[4],candidate.rect[2]-rect[4])}))
+          .sort((a,b)=>a.gap-b.gap).slice(0,8);
+        const widths=nearby.map(candidate=>({width:candidate.rect[3]-candidate.rect[1],weight:candidate.weight})).sort((a,b)=>a.width-b.width);
+        const halfWeight=widths.reduce((n,w)=>n+w.weight,0)/2;let cumulative=0,typicalWidth=0;
+        for(const item of widths){cumulative+=item.weight;if(cumulative>=halfWeight){typicalWidth=item.width;break;}}
+        // Short nearby lines must not narrow the inferred column and cut off equation numbers.
+        const column=nearby.filter(candidate=>candidate.rect[3]-candidate.rect[1]>=typicalWidth*.75&&candidate.rect[3]-candidate.rect[1]<=typicalWidth*1.5);
+        // Equation numbers may sit outside SDT's tight math rectangle. Include the surrounding
+        // text column at the same vertical slice so the original numbers are retained too.
+        const columnLeft=column.length?Math.min(...column.map(candidate=>candidate.rect[1])):rect[1];
+        const columnRight=column.length?Math.max(...column.map(candidate=>candidate.rect[3])):rect[3];
+        const left=Math.max(crop.x,Math.min(rect[1],columnLeft)-pad),bottom=Math.max(crop.y,rect[2]-pad);
+        const right=Math.min(crop.x+crop.width,Math.max(rect[3],columnRight)+pad),top=Math.min(crop.y+crop.height,rect[4]+pad);
+        if(!(right>left&&top>bottom))throw new Error(`${block.id} 的公式裁切范围无效。`);
+        const previous=boxes.get(pageIndex);
+        boxes.set(pageIndex,previous?{left:Math.min(previous.left,left),bottom:Math.min(previous.bottom,bottom),
+          right:Math.max(previous.right,right),top:Math.max(previous.top,top)}:{left,bottom,right,top});
       }
-      if (!p.snippets.length) throw new Error(`${block.id} 缺少原文坐标，无法保留其原始排版。`);
+      for(const [pageIndex,box] of boxes) {
+        const label=`截取原文第 ${pageIndex+1} 页公式`;
+        const image=await embeddedPage(pageIndex),imageWidth=box.right-box.left,imageHeight=box.top-box.bottom;
+        if(!(image.width>0&&image.height>0))throw new Error(`${label} 失败。`);
+        const scale=Math.min((ZW-24)/imageWidth,120/imageHeight,1);
+        plansByPage[pageIndex].push({kind:'formula',block,blockIDs:[block.id],image,width:imageWidth*scale,height:imageHeight*scale,sourceBox:box});
+      }
+      continue;
     }
-    plans.push(p);
-  }
-  const snippets = plans.flatMap(p=>p.snippets);
-  if (snippets.length && options.rasterize) {
-    for(const [i,snippet] of snippets.entries()) {
-      signal.throwIfAborted();
-      const label=`保留原文区域 ${i+1}/${snippets.length} · 源页 ${snippet.sourcePage+1} · ${snippet.blockID}`;
-      progress(label);
-      // Host callbacks return typed arrays from a different privileged compartment.
-      const png=await bounded(()=>options.rasterize!(snippet.sourcePage,snippet.box,signal,detail=>progress(`${label} · ${detail}`)),signal,90000,label);
-      signal.throwIfAborted();
-      snippet.image=await bounded(()=>doc.embedPng(new Uint8Array(png)),signal,15000,`${label} 图像载入`);
+    const heading=block.kind==='heading', size=heading?11.2:10.7;
+    const list=listInfo(block),originals=new Map<string,OriginalMathMetrics>();
+    const markerWidth=list?(list.ordered?Math.max(14,zhFont.widthOfTextAtSize(list.marker,size)+6):14):0;
+    const textInset=(heading?0:21)+(list?Math.min(list.depth,8)*14:0)+markerWidth;
+    const rewritten=inlineMathText(block,block.translation,translatedBoldRanges(block),(_span,index)=>`\uE000PWMS${index}\uE001`);
+    const matched=(rewritten.matchedMath||[]).filter(index=>!rewritten.retainedMath?.includes(index));
+    const oversized=matched.some(index=>{
+      const span=block.mathSpans![index];
+      const widths=span.rects.map(r=>(r[3]-r[1])/span.fontSize);
+      return (span.flow==='wrapped'?widths.reduce((a,b)=>a+b,0):Math.max(...widths,0))*size>(ZW-textInset)*2;
+    });
+    if(mathReviewRequired(block,rewritten)||oversized){
+      // An old draft with no provable formula correspondence must not print flattened math.
+      // Preserve its original paragraph and retain the editable Chinese in the project.
+      const pages=new Map<number,{left:number;bottom:number;right:number;top:number}>();
+      for(const r of block.rects){
+        const old=pages.get(r[0]);pages.set(r[0],old?{left:Math.min(old.left,r[1]),bottom:Math.min(old.bottom,r[2]),right:Math.max(old.right,r[3]),top:Math.max(old.top,r[4])}:
+          {left:r[1],bottom:r[2],right:r[3],top:r[4]});
+      }
+      for(const [pageIndex,area]of pages){
+        const crop=source.getPage(pageIndex).getCropBox(),box={left:Math.max(crop.x,area.left-1.2),bottom:Math.max(crop.y,area.bottom-1.2),right:Math.min(crop.x+crop.width,area.right+1.2),top:Math.min(crop.y+crop.height,area.top+1.2)};
+        const image=await embeddedPage(pageIndex),imageWidth=box.right-box.left,imageHeight=box.top-box.bottom;
+        const scale=Math.min((ZW-24)/imageWidth,(TEXT_HEIGHT-20-GAP*2)/imageHeight,1);
+        plansByPage[pageIndex].push({kind:'formula',block,blockIDs:[block.id],image,width:imageWidth*scale,height:imageHeight*scale+20,
+          imageHeight:imageHeight*scale,sourceBox:box,notice:`${block.id} ${oversized?'公式过宽':'数学对应'}需复核：本段保留原文，译文仍保存在项目中。`});
+      }
+      continue;
     }
-  } else if (snippets.length) {
-    const embedded = await doc.embedPages(snippets.map(s=>source.getPage(s.sourcePage)),snippets.map(s=>s.box));
-    snippets.forEach((s,i)=>s.embedded=embedded[i]);
+    for(const index of matched){
+      const span=block.mathSpans![index],key=`${block.id}/${index}`,parts:MathPart[]=[];
+      const sourceSize=span.fontSize;let totalHeight=0,width=0;
+      for(const [partIndex,rect] of span.rects.entries()){
+        const pageIndex=rect[0];if(pageIndex<0||pageIndex>=source.getPageCount())throw new Error(`${block.id} 的行内公式页码无效。`);
+        const crop=source.getPage(pageIndex).getCropBox(),pad=0;
+        const box={left:Math.max(crop.x,rect[1]-pad),bottom:Math.max(crop.y,rect[2]-pad),right:Math.min(crop.x+crop.width,rect[3]+pad),top:Math.min(crop.y+crop.height,rect[4]+pad)};
+        const image=await embeddedPage(pageIndex);
+        const w=(box.right-box.left)/sourceSize,h=(box.top-box.bottom)/sourceSize;
+        parts.push({image,width:w,height:h,offsetX:(box.left-crop.x)/sourceSize,offsetY:(box.bottom-crop.y)/sourceSize,
+          pageWidth:image.width/sourceSize,pageHeight:image.height/sourceSize,
+          targetX:span.flow==='wrapped'?width:0,targetTop:span.flow==='wrapped'?(box.top-span.baselines[partIndex])/sourceSize:-totalHeight});
+        width=span.flow==='wrapped'?width+w:Math.max(width,w);totalHeight+=h;
+      }
+      if(!parts.length)throw new Error(`${block.id} 的公式原文坐标缺失，请修订为 LaTeX 后保存。`);
+      totalHeight+=Math.max(0,parts.length-1)*.2;
+      const first=span.rects[0],single=parts.length===1;
+      const ascent=span.flow==='wrapped'?Math.max(...parts.map(p=>p.targetTop)):
+        Math.max(0,Math.min(totalHeight,single?(first[4]-span.baselines[0])/sourceSize:totalHeight*.75));
+      const descent=span.flow==='wrapped'?Math.max(...parts.map(p=>p.height-p.targetTop)):totalHeight-ascent;
+      if(span.flow!=='wrapped')for(const [i,part] of parts.entries())part.targetTop+=ascent-i*.2;
+      const metrics={key,width,ascent,descent,index,wrapped:span.flow==='wrapped'};
+      mathAssets.set(key,{parts,metrics});originals.set(`\uE000PWMS${index}\uE001`,metrics);
+    }
+    const content=listText(block,rewritten.text,rewritten.ranges);
+    const runs=withFontFallback(styledRuns(content.text,content.ranges,originals),zhChars,monoChars);
+    const absent=[...new Set(runs.flatMap(run=>run.math||run.originalMath?[]:[...run.text].filter(c=>!/[^\S\r\n]/.test(c)&&!(run.mono?monoChars:zhChars).has(c.codePointAt(0)!))))];
+    if(absent.length)throw new Error(`${block.id} 含字体不支持的字符：${absent.slice(0,12).join(' ')}。请修订后重排。`);
+    const lines=wrapStyled(runs,zhFont,monoFont,size,ZW-textInset).map(line=>{
+      const math=line.runs.filter(run=>run.math||run.originalMath).map(run=>({box:run.originalMath||latexBox(run.math!),size:size*(run.mathScale||1)}));
+      const ascent=Math.max(size,...math.map(item=>item.box.ascent*item.size));
+      const descent=Math.max(size*.2,...math.map(item=>item.box.descent*item.size));
+      return{...line,ascent,height:Math.max(LEAD_ZH,ascent+descent+3)};
+    });
+    plansByPage[sourcePage!].push({kind:'text',block,lines,
+      size,lead:LEAD_ZH,list,markerWidth,textInset});
   }
-  let page: PDFPage, cursor = LAYOUT.top;
-  function nextPage() {
-    page = doc.addPage([LAYOUT.width,LAYOUT.height]); cursor=LAYOUT.top;
-    page.drawText('PaperWeave | Paragraph aligned bilingual reading', {x:LAYOUT.margin,y:LAYOUT.height-25,size:9,font:labelFont,color:grey});
+
+  const sheets: Sheet[]=[];
+  for (let sourcePage=0;sourcePage<plansByPage.length;sourcePage++) {
+    signal.throwIfAborted();
+    progress(`60/40 逐页排译 ${sourcePage+1}/${plansByPage.length}`);
+    let continuation=0,used=0;
+    let sheet:Sheet={sourcePage,continuation,entries:[]};sheets.push(sheet);
+    const nextSheet=()=>{continuation++;used=0;sheet={sourcePage,continuation,entries:[]};sheets.push(sheet);};
+    const plans=plansByPage[sourcePage];
+    for(let pi=0;pi<plans.length;pi++) {
+      const plan=plans[pi];
+      if(plan.kind!=='text') {
+        if(used+GAP*2+plan.height>TEXT_HEIGHT&&sheet.entries.length)nextSheet();
+        sheet.entries.push({kind:'original',plan});used+=GAP+plan.height+GAP;
+        continue;
+      }
+      const heading=plan.block.kind==='heading';
+      const blockGap=plan.lines.length?GAP:0;
+      const next=plans[pi+1];
+      const nextHeight=next&&next.kind!=='text'?next.height:next?.lines.length?next.lines[0].height!:0;
+      const reserveNext=heading&&nextHeight ? GAP+nextHeight : 0;
+      if(used+blockGap+(plan.lines[0]?.height||0)+reserveNext>TEXT_HEIGHT&&sheet.entries.length)nextSheet();
+      let offset=0;
+      while(offset<plan.lines.length) {
+        const gap=offset===0?blockGap:0;
+        if(plan.lines[offset].height!>TEXT_HEIGHT)throw new Error(`${plan.block.id} 的公式过高，无法放入页面。`);
+        if(used+gap+plan.lines[offset].height!>TEXT_HEIGHT)nextSheet();
+        let end=offset,height=0;
+        while(end<plan.lines.length&&used+(offset===0?blockGap:0)+height+plan.lines[end].height!<=TEXT_HEIGHT){height+=plan.lines[end].height!;end++;}
+        if(end===offset){nextSheet();continue;}
+        sheet.entries.push({kind:'text',plan,start:offset,end,startsBlock:offset===0,continued:offset>0});
+        used+=(offset===0?blockGap:0)+height;
+        offset=end;
+        if(offset<plan.lines.length)nextSheet();
+      }
+      if(plan.lines.length)used+=2;
+    }
+    if(plans.length===0) sheet.entries=[];
+  }
+
+  for(const [sheetIndex,sheet] of sheets.entries()) {
+    signal.throwIfAborted();
+    const page=doc.addPage([LAYOUT.width,LAYOUT.height]);
+    const original=await embeddedPage(sheet.sourcePage);
+    const scale=Math.min(EW/original.width,(LAYOUT.top-LAYOUT.bottom)/original.height);
+    const sourceWidth=original.width*scale,sourceHeight=original.height*scale;
+    page.drawPage(original,{x:EX+(EW-sourceWidth)/2,y:LAYOUT.bottom+(LAYOUT.top-LAYOUT.bottom-sourceHeight)/2,
+      width:sourceWidth,height:sourceHeight});
+
+    const sourceLabel=`原文第 ${sheet.sourcePage+1} 页`+(sheet.continuation?` · 译文续页 ${sheet.continuation}`:'');
+    page.drawText(`PaperWeave | ${sourceLabel}`,{x:LAYOUT.margin,y:LAYOUT.height-25,size:9,font:zhFont,color:grey});
     page.drawLine({start:{x:LAYOUT.margin,y:LAYOUT.height-36},end:{x:LAYOUT.width-LAYOUT.margin,y:LAYOUT.height-36},thickness:.5,color:faint});
-    page.drawText('ENGLISH / 60%',{x:EX,y:LAYOUT.height-82,size:8,font:labelFont,color:grey});
-    page.drawText('中文译文 / 40%',{x:ZX,y:LAYOUT.height-82,size:8,font:zhFont,color:grey});
+    page.drawText(`ENGLISH · 原文整页 ${sheet.sourcePage+1}`,{x:EX,y:LAYOUT.height-82,size:8,font:zhFont,color:grey});
+    const zhLabel=sheet.continuation?`中文译文 · 原文第 ${sheet.sourcePage+1} 页（续）`:`中文译文 · 对应原文第 ${sheet.sourcePage+1} 页`;
+    page.drawText(zhLabel,{x:ZX,y:LAYOUT.height-82,size:8,font:zhFont,color:grey});
     page.drawLine({start:{x:DIV,y:LAYOUT.height-92},end:{x:DIV,y:LAYOUT.bottom-3},thickness:.65,color:rule});
-  }
-  nextPage();
-  const fullHeight = (p:Plan) => Math.max(p.en.length*p.enLead || p.snippets.reduce((s,c,i)=>s+c.height+(i?6:0),0),p.zh.length*p.zhLead)+GAP+HEADROOM;
-  let number=0;
-  for (let i=0;i<plans.length;i++) {
-    const p=plans[i]; const whole=fullHeight(p);
-    signal.throwIfAborted(); progress(`60/40 逐段排版 ${i+1}/${plans.length}`);
-    if (p.block.kind === 'heading' && plans[i+1]) {
-      const nextHeight=fullHeight(plans[i+1]);
-      const withNext=whole+(nextHeight<=LAYOUT.top-LAYOUT.bottom-whole?nextHeight:Math.min(nextHeight,130));
-      if (withNext <= LAYOUT.top-LAYOUT.bottom && withNext>cursor-LAYOUT.bottom) nextPage();
+
+    if(!sheet.entries.length) {
+      page.drawText('本页没有可译正文或图表。\n参考文献等内容保留在左侧原文中。',
+        {x:ZX,y:LAYOUT.top-16,size:9,font:zhFont,color:grey,maxWidth:ZW});
     }
-    if (whole <= LAYOUT.top-LAYOUT.bottom && whole>cursor-LAYOUT.bottom) nextPage();
-    if (p.block.kind !== 'heading') number++;
-    let e=0,z=0,s=0; let continued=false;
-    while (e<p.en.length || z<p.zh.length || s<p.snippets.length) {
-      let available=cursor-LAYOUT.bottom-GAP-HEADROOM;
-      if (available<Math.max(p.enLead,p.zhLead)*2 || (s<p.snippets.length && p.snippets[s].height>available)) {
-        nextPage(); available=USABLE;
+    let cursor=LAYOUT.top-HEADROOM;
+    for(const entry of sheet.entries) {
+      if(entry.kind==='original') {
+        const {plan}=entry;
+        cursor-=GAP;
+        if(plan.notice)page.drawText(plan.notice,{x:ZX,y:cursor-10,size:8,font:zhFont,color:grey});
+        const x=ZX+(ZW-plan.width)/2,y=cursor-plan.height,height=plan.imageHeight||plan.height;
+        const crop=source.getPage(sheet.sourcePage).getCropBox(),scale=plan.width/(plan.sourceBox.right-plan.sourceBox.left);
+        page.pushOperators(pushGraphicsState(),rectangle(x,y,plan.width,height),clip(),endPath());
+        page.drawPage(plan.image,{x:x-(plan.sourceBox.left-crop.x)*scale,y:y-(plan.sourceBox.bottom-crop.y)*scale,
+          width:plan.image.width*scale,height:plan.image.height*scale});
+        page.pushOperators(popGraphicsState());
+        options.onPlacement?.({kind:plan.kind,blockID:plan.block.id,blockIDs:plan.blockIDs,groupLabel:plan.groupLabel,
+          sourcePage:sheet.sourcePage,pageIndex:sheetIndex,
+          x:ZX+(ZW-plan.width)/2,y:cursor-plan.height,width:plan.width,height:plan.height,
+          continued:sheet.continuation>0,sourceBox:plan.sourceBox,mathReview:!!plan.notice});
+        cursor-=plan.height+GAP;
+        continue;
       }
-      const top=cursor-HEADROOM;
-      const enCount=Math.min(p.en.length-e,Math.floor(available/p.enLead));
-      const zhCount=Math.min(p.zh.length-z,Math.floor(available/p.zhLead));
-      let sourceHeight=0,sourceCount=0;
-      while(s+sourceCount<p.snippets.length && sourceHeight+(sourceCount?6:0)+p.snippets[s+sourceCount].height<=available) {
-        const snippet=p.snippets[s+sourceCount];
-        if(sourceCount) sourceHeight+=6;
-        const placement={x:EX,y:top-sourceHeight-snippet.height,width:snippet.width,height:snippet.height};
-        if(snippet.image)page!.drawImage(snippet.image,placement);else page!.drawPage(snippet.embedded!,placement);
-        sourceHeight+=snippet.height; sourceCount++;
+      const {plan,start,end,startsBlock,continued}=entry;
+      if(startsBlock)cursor-=GAP;
+      const entryTop=cursor;
+      const heading=plan.block.kind==='heading';
+      if(startsBlock&&!heading) {
+        const label=plan.block.id.replace(/^b/u,'')+(continued?'+':'');
+        page.drawText(label,{x:ZX,y:cursor-plan.size+1,size:6.8,font:labelFont,color:grey});
       }
-      for(let n=0;n<enCount;n++) {
-        const line=p.en[e+n];
-        for(const run of positionLine([{text:line.text,mono:false}],p.enFont,p.enFont,p.enSize,EW,p.block.kind==='body'&&!line.paragraphEnd)) {
-          if(run.text)page!.drawText(run.text,{x:EX+run.x,y:top-p.enSize-n*p.enLead,font:p.enFont,size:p.enSize,color:ink});
-        }
+      if(startsBlock&&plan.list) {
+        const x=ZX+plan.textInset-plan.markerWidth,color=heading?ink:blue;
+        if(plan.list.ordered)page.drawText(plan.list.marker,{x,y:cursor-plan.size,font:zhFont,size:plan.size,color});
+        else page.drawCircle({x:x+3.5,y:cursor-plan.size*.55,size:1.4,color});
       }
-      for(let n=0;n<zhCount;n++) {
-        const line=p.zh[z+n];
-        for(const run of positionLine(line.runs,zhFont,monoFont,p.zhSize,ZW,p.block.kind==='body'&&!line.paragraphEnd)) {
+      for(let i=start;i<end;i++) {
+        const line=plan.lines[i];
+        const x=ZX+plan.textInset, width=ZW-plan.textInset;
+        for(const run of positionLine(line.runs,zhFont,monoFont,plan.size,width,
+          !heading&&plan.block.kind==='body'&&!line.paragraphEnd)) {
           const font=run.mono?monoFont:zhFont;
-          if(run.text)page!.drawText(run.text,{x:ZX+run.x,y:top-p.zhSize-n*p.zhLead,font,size:p.zhSize,color:blue});
+          if(run.text) {
+            const drawOptions={x:x+run.x,y:cursor-line.ascent!,font,size:plan.size,color:heading?ink:blue};
+            if(run.originalMath){
+              const asset=mathAssets.get(run.originalMath.key)!;const mathSize=plan.size*(run.mathScale||1);
+              for(const part of asset.parts){
+                const bottom=drawOptions.y+(part.targetTop-part.height)*mathSize,left=drawOptions.x+part.targetX*mathSize;
+                page.pushOperators(pushGraphicsState(),rectangle(left,bottom,part.width*mathSize,part.height*mathSize),clip(),endPath());
+                page.drawPage(part.image,{x:left-part.offsetX*mathSize,y:bottom-part.offsetY*mathSize,width:part.pageWidth*mathSize,height:part.pageHeight*mathSize});
+                page.pushOperators(popGraphicsState());
+              }
+            }else if(run.math){
+              drawLatex(page,run.math,drawOptions.x,drawOptions.y,plan.size*(run.mathScale||1),drawOptions.color);
+              if(run.bold)drawLatex(page,run.math,drawOptions.x+.15,drawOptions.y,plan.size*(run.mathScale||1),drawOptions.color);
+            }
+            else{page.drawText(run.text,drawOptions);if(run.bold)page.drawText(run.text,{...drawOptions,x:drawOptions.x+.22});}
+          }
         }
+        cursor-=line.height!;
       }
-      if (!enCount && !zhCount && !sourceCount) throw new Error(`${p.block.id} 无法分页。`);
-      const enHeight=Math.max(enCount*p.enLead,sourceHeight),zhHeight=zhCount*p.zhLead;
-      if (p.block.kind !== 'heading') {
-        const tag=String(number).padStart(2,'0')+(continued?'+':'');
-        page!.drawText(tag,{x:LAYOUT.margin,y:top-9,size:7.5,font:labelFont,color:blue});
-        if(zhCount) page!.drawText(tag,{x:DIV+2,y:top-9,size:7.5,font:labelFont,color:blue});
-      }
-      onPlacement?.({blockID:p.block.id,pageIndex:doc.getPageCount()-1,continued,top,
-        english:{x:EX,width:EW,height:enHeight},chinese:{x:ZX,width:ZW,height:zhHeight}});
-      cursor=top-Math.max(enHeight,zhHeight)-GAP;
-      page!.drawLine({start:{x:EX,y:cursor+7},end:{x:DIV-LAYOUT.gutter,y:cursor+7},thickness:.3,color:faint});
-      if(zhCount) page!.drawLine({start:{x:ZX,y:cursor+7},end:{x:LAYOUT.width-LAYOUT.margin,y:cursor+7},thickness:.3,color:faint});
-      e+=enCount;z+=zhCount;s+=sourceCount;
-      if(e<p.en.length || z<p.zh.length || s<p.snippets.length) { continued=true;nextPage(); }
+      options.onPlacement?.({kind:'text',blockID:plan.block.id,sourcePage:sheet.sourcePage,pageIndex:sheetIndex,
+        x:ZX+plan.textInset,y:cursor,width:ZW-plan.textInset,height:entryTop-cursor,continued,
+        listMarker:startsBlock?plan.list?.marker:undefined,listDepth:plan.list?.depth,
+        listMarkerX:startsBlock&&plan.list?ZX+plan.textInset-plan.markerWidth:undefined,
+        mathExpressions:plan.lines.slice(start,end).flatMap(line=>line.runs.flatMap(run=>run.math?[run.math]:[])),
+        inlineMathSources:plan.lines.slice(start,end).flatMap(line=>line.runs.flatMap(run=>run.originalMath?[run.originalMath.index]:[])),
+        inlineMathWrapped:plan.lines.slice(start,end).flatMap(line=>line.runs.flatMap(run=>run.originalMath?.wrapped?[run.originalMath.index]:[])),
+        bold:plan.lines.slice(start,end).some(line=>line.runs.some(run=>run.bold))});
+      if(end===plan.lines.length)cursor-=2;
     }
-    if(i%8===0) await new Promise(resolve=>setTimeout(resolve,0));
+    page.drawText(`${sheetIndex+1} / ${sheets.length}`,{x:LAYOUT.width-95,y:25,size:8,font:labelFont,color:grey});
   }
-  const count=doc.getPageCount();
-  for(let i=0;i<count;i++) doc.getPage(i).drawText(`${i+1} / ${count}`,{x:LAYOUT.width-95,y:25,size:8,font:labelFont,color:grey});
+
   if(appendix) {
     const p=doc.addPage([LAYOUT.width,LAYOUT.height]);
     p.drawText('原文附录',{x:LAYOUT.margin,y:LAYOUT.height-75,size:20,font:zhFont,color:blue});
-    p.drawText('以下保留完整原 PDF，便于核对图表、公式和版面识别。',{x:LAYOUT.margin,y:LAYOUT.height-112,size:12,font:zhFont,color:grey});
-    const copied=await doc.copyPages(source,source.getPageIndices());copied.forEach(p=>doc.addPage(p));
+    p.drawText('以下附上完整原 PDF，便于检索、复制和批注。',{x:LAYOUT.margin,y:LAYOUT.height-112,size:12,font:zhFont,color:grey});
+    const copied=await doc.copyPages(source,source.getPageIndices());copied.forEach(page=>doc.addPage(page));
   }
   doc.setTitle(`${project.source.title} — English / Chinese 60-40`);
   doc.setCreator('PaperWeave '+project.pluginVersion);
-  doc.setSubject('Paragraph aligned bilingual reading copy; figures, captions and tables remain original.');
-  signal.throwIfAborted(); progress('正在写入 60/40 双语 PDF…');
+  doc.setSubject('Original PDF pages preserved on the left; editable page-grouped translations on the right.');
+  signal.throwIfAborted();progress('正在写入保留原页结构的 60/40 双语 PDF…');
   return doc.save();
 }

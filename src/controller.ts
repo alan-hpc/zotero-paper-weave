@@ -1,9 +1,12 @@
-import { Project, Settings, now, validateProject } from './model';
+import { Block, Project, ProviderName, Settings, EXTRACTION_VERSION, now, validateProject } from './model';
 import { extractProject } from './extract';
+import { reconcileExtraction, sourceIdentity } from './upgrade';
+import { rebaseMathRefs } from './inlineMath';
 import { endpoint } from './provider';
 import { PreferredAttachments } from './preferred';
 import { readAsset } from './assets';
-import { snippetRenderer } from './snippets';
+import { resolveSettings } from './settings';
+import { applyAuthorMetadata } from './frontMatter';
 
 let meta: { id: string; version: string; rootURI: string };
 const menus = new Map<any, { nodes: any[]; popup: any; listener: any }>();
@@ -12,6 +15,8 @@ const locks = new Set<string>();
 let toolbarHandler: ((event: any) => void) | undefined;
 const readerButtons = new Set<any>();
 let active = false;
+let stopping=false,lifecycle=0;
+let workbenchOpening:Promise<void>|undefined;
 let preferred: PreferredAttachments;
 let indexWrites = Promise.resolve();
 const pref = 'extensions.paperweave.';
@@ -20,7 +25,7 @@ const realm = (base: string) => endpoint(base);
 const directory = () => PathUtils.join(Zotero.DataDirectory.dir, 'paperweave');
 
 export async function start(m: typeof meta) {
-  meta = m; active = true;
+  meta = m; active = true;stopping=false;lifecycle++;
   preferred = new PreferredAttachments(Zotero);
   await preferred.install();
   if (Zotero.Reader?.registerEventListener) {
@@ -30,52 +35,45 @@ export async function start(m: typeof meta) {
       button.title = 'PaperWeave：翻译 / 修订当前 PDF';
       button.setAttribute('aria-label', 'PaperWeave 翻译或修订当前 PDF');
       button.style.cssText = 'padding:0 8px;min-width:44px;font-size:12px;white-space:nowrap;';
-      button.addEventListener('click', () => void open(Zotero.getMainWindow(), reader.itemID));
+      button.addEventListener('click', () => void openWorkbench(Zotero.getMainWindow(), reader.itemID));
       readerButtons.add(button); append(button);
     };
     Zotero.Reader.registerEventListener('renderToolbar', toolbarHandler, meta.id);
   }
 }
 export function settings(): Settings {
-  return {
+  let routing;try{routing=JSON.parse(Zotero.Prefs.get(pref+'routing',true)||'null');}catch{}
+  return resolveSettings({
     baseURL: Zotero.Prefs.get(pref + 'baseURL', true) || 'https://api.deepseek.com/v1',
     model: Zotero.Prefs.get(pref + 'model', true) || 'deepseek-flash',
-    prompt: Zotero.Prefs.get(pref + 'prompt', true) || ''
-  };
+    prompt: Zotero.Prefs.get(pref + 'prompt', true) || '',routing
+  });
 }
 function logins(base: string): any[] { return Services.logins.findLogins(origin, null, realm(base)); }
 export function hasKey(base: string) { return logins(base).length > 0; }
 export function apiKey(base: string) { return logins(base)[0]?.password || ''; }
-export async function saveSettings(value: Settings, key: string, removeKey = false) {
-  endpoint(value.baseURL);
-  if (!value.model.trim()) throw new Error('请填写模型名称。');
-  if (removeKey || key) {
-    const existing = logins(value.baseURL);
-    if (removeKey) for (const entry of existing) Services.logins.removeLogin(entry);
-    if (key && !removeKey) {
+export async function saveSettings(value: Settings, key: string|Partial<Record<ProviderName,string>>, removeKey:boolean|ProviderName = false) {
+  const resolved=resolveSettings(value),routing=resolved.routing;
+  for(const name of ['codex','deepseek','custom'] as const){
+    endpoint(routing[name].baseURL);
+    if(!routing[name].model)throw new Error('请填写模型名称。');
+  }
+  const changes=typeof key==='string'?[{baseURL:resolved.baseURL,key,remove:removeKey===true}]:
+    (['codex','deepseek','custom'] as const).map(name=>({baseURL:routing[name].baseURL,key:key[name]?.trim()||'',remove:removeKey===name}));
+  for(const change of changes){
+    if(!change.remove&&!change.key)continue;
+    const existing = logins(change.baseURL);
+    if (change.remove) for (const entry of existing) Services.logins.removeLogin(entry);
+    if (change.key && !change.remove) {
       const entry = Cc['@mozilla.org/login-manager/loginInfo;1'].createInstance(Ci.nsILoginInfo);
-      entry.init(origin, null, realm(value.baseURL), 'api-key', key, '', '');
+      entry.init(origin, null, realm(change.baseURL), 'api-key', change.key, '', '');
       if (existing.length) Services.logins.modifyLogin(existing[0], entry);
       else await Services.logins.addLoginAsync(entry);
       for (const duplicate of existing.slice(1)) Services.logins.removeLogin(duplicate);
     }
   }
-  for (const name of ['baseURL','model','prompt'] as const) Zotero.Prefs.set(pref + name, value[name].trim(), true);
-}
-export async function importHJFYSettings() {
-  let models: any;
-  try { models = JSON.parse(Zotero.Prefs.get('extensions.zotero.hjfy.models', true) || '[]'); }
-  catch { throw new Error('幻觉翻译的模型配置无法读取，请手动填写。'); }
-  const model = Array.isArray(models) ? models[0] : null;
-  if (!model || typeof model.baseURL !== 'string' || typeof model.model !== 'string') {
-    throw new Error('未找到幻觉翻译的模型配置，请手动填写。');
-  }
-  endpoint(model.baseURL);
-  const identity = model.baseURL.replace(/\/$/,'') + '\n' + model.model;
-  const entry = Services.logins.findLogins('chrome://hjfy-zotero',null,'HJFY API Key')
-    .find((login: any) => login.username === identity);
-  await saveSettings({baseURL:model.baseURL,model:model.model,prompt:settings().prompt},entry?.password || '');
-  return { importedKey: !!entry };
+  for (const name of ['baseURL','model','prompt'] as const) Zotero.Prefs.set(pref + name, resolved[name].trim(), true);
+  Zotero.Prefs.set(pref+'routing',JSON.stringify(routing),true);
 }
 async function ensureDir() { await IOUtils.makeDirectory(directory(), { ignoreExisting: true, permissions: 0o700 }); }
 function projectPath(item: any, hash: string) {
@@ -111,6 +109,14 @@ export async function loadProject(item: any, progress: (s: string) => void, sign
   if (existing) {
     validateProject(existing); existing.pluginVersion = meta.version; existing.terminologyBatches ||= [];
     existing.source.title = item.parentItem?.getField('title') || item.getField('title') || existing.source.title;
+    if (existing.extractionVersion !== EXTRACTION_VERSION && existing.extractionUpgradeAttempted !== EXTRACTION_VERSION) {
+      progress('正在更新图表、公式与加粗结构并保留已有译文…');
+      const refreshed = await extractProject(Zotero, item, meta.version, progress, signal);
+      existing.extractionUpgradeAttempted = EXTRACTION_VERSION;
+      reconcileExtraction(existing,refreshed);
+      await saveProject(existing);
+    }
+    if(applyAuthorMetadata(existing).changed)await saveProject(existing);
     return existing;
   }
   const project = await extractProject(Zotero, item, meta.version, progress, signal);
@@ -125,7 +131,6 @@ export async function fontBytes() {
   return readAsset(Zotero.getMainWindow().XMLHttpRequest, meta.rootURI + 'chrome/content/fonts/NotoSerifSC-Regular.ttf');
 }
 export async function monoFontBytes() { return readAsset(Zotero.getMainWindow().XMLHttpRequest, meta.rootURI + 'chrome/content/fonts/SarasaMonoSC-Regular.ttf'); }
-export async function sourceRenderer(item: any,signal?:AbortSignal) { return snippetRenderer(Zotero,item,Cu,signal); }
 export function preferBilingual() { return Zotero.Prefs.get(pref + 'preferBilingual', true) !== false; }
 export async function preferOriginal(item: any) {
   if (!item.parentID) throw new Error('独立 PDF 没有父论文条目；请直接打开原文附件。');
@@ -142,7 +147,7 @@ export async function attachPDF(item: any, project: Project, bytes: Uint8Array, 
   const temp = PathUtils.join(Zotero.getTempDirectory().path, filename);
   await IOUtils.write(temp, bytes, { permissions: 0o600 });
   try {
-    const args: any = { file: temp, title: `双语 60-40 · ${project.source.title} · ${stamp.slice(0,19)}`,
+    const args: any = { file: temp, title: `${project.source.title}__${stamp.slice(0,19)}`,
       fileBaseName: filename.slice(0,-4), renameIfAllowedType: false };
     if (item.parentID) args.parentItemID = item.parentID;
     else { args.libraryID = item.libraryID; args.collections = item.getCollections(); }
@@ -190,16 +195,19 @@ export async function importProject(window: any, item: any, current: Project) {
   const records = new Map(incoming.blocks.map(b => [b.id, b]));
   for (const block of current.blocks) {
     const edit = records.get(block.id);
-    if (!edit || edit.source !== block.source) throw new Error('项目段落与当前原文不匹配。');
+    if (!edit || sourceIdentity(edit.source) !== sourceIdentity(block.source)) throw new Error('项目段落与当前原文不匹配。');
   }
   for (const block of current.blocks) {
     const edit = records.get(block.id)!;
     block.translation = edit.translation; block.kind = edit.kind;
+    block.translationBoldRanges = edit.translationBoldRanges;
+    block.translationMathRefs=rebaseMathRefs(edit,block);
     block.edited = true; block.translatedWith = edit.translatedWith;
   }
   current.terms = incoming.terms;
   current.terminologyReady = incoming.terminologyReady;
   current.terminologyBatches = incoming.terminologyBatches || [];
+  applyAuthorMetadata(current);
   await saveProject(current);
   return current;
 }
@@ -230,18 +238,41 @@ async function chooseItem(window: any) {
   }
   return sourceOf(item);
 }
-async function open(window: any, itemID?: number) {
-  try {
+function focusWorkbench():boolean {
+  for(const [key,w]of windows) {
+    try { if(w.closed){windows.delete(key);continue;} }
+    catch { windows.delete(key);continue; }
+    // A live window still owns the slot if the host cannot restore or focus it.
+    try { if(typeof w.STATE_MINIMIZED==='number'&&w.windowState===w.STATE_MINIMIZED)w.restore?.(); } catch {}
+    try { w.focus(); } catch {}
+    return true;
+  }
+  return false;
+}
+export async function openWorkbench(window: any, itemID?: number) {
+  if(!active||stopping)return;
+  if(focusWorkbench())return;
+  if(workbenchOpening){await workbenchOpening.catch(()=>{});focusWorkbench();return;}
+  const generation=lifecycle;
+  const opening=(async()=>{
     const item = itemID ? await sourceOf(await Zotero.Items.getAsync(itemID)) : await chooseItem(window);
+    if(!active||stopping||generation!==lifecycle||focusWorkbench())return;
     const key = `${item.libraryID}:${item.key}`;
-    if (windows.get(key) && !windows.get(key).closed) { windows.get(key).focus(); return; }
-    const bridge = { item, meta, settings, hasKey, apiKey, saveSettings, importHJFYSettings, loadProject, saveProject,
-      sourceBytes, fontBytes, monoFontBytes, sourceRenderer, attachPDF, preferBilingual, preferOriginal, exportProject, importProject, acquire };
+    const bridge = { item, meta, settings, hasKey, apiKey, saveSettings, loadProject, saveProject,
+      sourceBytes, fontBytes, monoFontBytes, attachPDF, preferBilingual, preferOriginal, exportProject, importProject, acquire };
     const w = window.openDialog('chrome://paperweave/content/workbench.xhtml', '',
       'chrome,resizable,centerscreen,width=1140,height=840', bridge);
     windows.set(key, w);
-    w.addEventListener('unload', () => windows.delete(key), { once: true });
+    w.addEventListener('unload', (event:any) => {
+      if(event?.target&&event.target!==w.document)return;
+      if(windows.get(key)===w)windows.delete(key);
+    });
+  })();
+  workbenchOpening=opening;
+  try {
+    await opening;
   } catch (e: any) { Services.prompt.alert(window, 'PaperWeave', e.message); }
+  finally { if(workbenchOpening===opening)workbenchOpening=undefined; }
 }
 export function attach(window: any) {
   if (menus.has(window)) return;
@@ -251,7 +282,7 @@ export function attach(window: any) {
     if (!parent) return;
     const node = d.createXULElement('menuitem');
     node.id = id; node.setAttribute('label', 'PaperWeave · 逐段双语 PDF / 修订');
-    node.addEventListener('command', () => void open(window));
+    node.addEventListener('command', () => void openWorkbench(window));
     parent.appendChild(node); nodes.push(node);
   };
   const popup = d.getElementById('zotero-itemmenu');
@@ -262,7 +293,7 @@ export function attach(window: any) {
   keyset.id = 'paperweave-keyset';
   const key = d.createXULElement('key');
   key.setAttribute('key', 'T'); key.setAttribute('modifiers', 'alt,shift');
-  key.addEventListener('command', () => void open(window));
+  key.addEventListener('command', () => void openWorkbench(window));
   keyset.appendChild(key); d.documentElement.appendChild(keyset); nodes.push(keyset);
   const listener = () => {
     const n = d.getElementById('paperweave-itemmenu');
@@ -278,6 +309,7 @@ export function detach(window: any) {
   entry?.nodes.forEach(n => { try { n.remove(); } catch {} });menus.delete(window);
 }
 export async function stop() {
+  stopping=true;lifecycle++;
   await Promise.allSettled([...windows.values()].map(async w => {
     try { if (!w.closed) await w.paperWeaveBeforeShutdown?.(); } catch {}
   }));
@@ -288,6 +320,6 @@ export async function stop() {
   for (const button of readerButtons) { try { button.remove(); } catch {} }
   readerButtons.clear();
   for (const w of windows.values()) { try { if (!w.closed) w.close(); } catch {} }
-  windows.clear(); locks.clear();
+  windows.clear(); locks.clear();workbenchOpening=undefined;
   for (const w of menus.keys()) detach(w);
 }
