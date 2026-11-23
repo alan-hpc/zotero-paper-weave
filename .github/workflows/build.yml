@@ -27,6 +27,8 @@ jobs:
             dist/*.xpi
             dist/SHA256SUMS
             dist/updates.json
+            dist/paperweave-codex-proxy.mjs
+            dist/CODEX_PROXY.zh-CN.md
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
@@ -47,8 +49,11 @@ jobs:
         run: |
           args=()
           if [[ "$RELEASE_TAG" == *alpha* || "$RELEASE_TAG" == *beta* ]]; then args+=(--prerelease); fi
+          notes="docs/releases/${RELEASE_TAG}.md"
+          if [[ ! -f "$notes" ]]; then notes=docs/RELEASE_NOTES.md; fi
+          assets=(dist/*.xpi dist/SHA256SUMS dist/updates.json dist/paperweave-codex-proxy.mjs dist/CODEX_PROXY.zh-CN.md)
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" dist/*.xpi dist/SHA256SUMS dist/updates.json --clobber
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
           else
-            gh release create "$RELEASE_TAG" dist/*.xpi dist/SHA256SUMS dist/updates.json --title "PaperWeave $RELEASE_TAG" --notes-file docs/RELEASE_NOTES.md "${args[@]}"
+            gh release create "$RELEASE_TAG" "${assets[@]}" --title "PaperWeave $RELEASE_TAG" --notes-file "$notes" "${args[@]}"
           fi
