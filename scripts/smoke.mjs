@@ -490,13 +490,15 @@ try {
   const uiBundle=await build({entryPoints:['src/workbench.ts'],bundle:true,write:false,format:'iife',target:'firefox128'});
   const uiElement=()=>({value:'',textContent:'',checked:false,disabled:false,open:false,attributes:new Map(),listeners:new Map(),children:[],
     setAttribute(key,value){this.attributes.set(key,value);},removeAttribute(key){this.attributes.delete(key);},
-    classList:{toggle(){},add(){}},addEventListener(name,listener){this.listeners.set(name,listener);},replaceChildren(){this.children=[];},append(...nodes){this.children.push(...nodes);},appendChild(node){this.children.push(node);return node;}});
+    classList:{toggle(){},add(){}},addEventListener(name,listener){this.listeners.set(name,listener);},replaceChildren(){this.children=[];},append(...nodes){this.children.push(...nodes);},appendChild(node){this.children.push(node);return node;},
+    insertBefore(node,before){this.children=this.children.filter(child=>child!==node);const index=this.children.indexOf(before);this.children.splice(index<0?this.children.length:index,0,node);return node;}});
   const elements=new Map([...markup.matchAll(/\bid="([^"]+)"/g)].map(m=>[m[1],uiElement()]));
   elements.get('filter').value='all';
   const events=new Map();let queries=0;
   const uiDocument={readyState:'loading',createElement:uiElement,getElementsByTagName:()=>[],getElementById:id=>{queries++;return elements.get(id)||null;},body:{classList:{toggle(){}}}};
   let finishProject;
-  const bridge={settings:()=>({baseURL:'https://api.deepseek.com/v1',model:'deepseek-flash',prompt:''}),hasKey:()=>false,preferBilingual:()=>true,
+  let storedUISettings={baseURL:'https://api.deepseek.com/v1',model:'deepseek-flash',prompt:''};
+  const bridge={settings:()=>storedUISettings,saveSettings:async value=>{storedUISettings=value;},hasKey:()=>false,preferBilingual:()=>true,
     item:{getField:()=> 'Synthetic startup check'},acquire:()=>()=>{},loadProject:()=>new Promise(resolve=>{finishProject=resolve;})};
   const uiWindow={arguments:[bridge],addEventListener:(name,fn)=>events.set(name,fn)};
   const uiContext=vm.createContext({window:uiWindow,document:uiDocument,setTimeout,clearTimeout,setInterval,clearInterval,AbortController,TextEncoder,TextDecoder,URL,console});
@@ -512,14 +514,35 @@ try {
   assert.equal(elements.get('task-progress').attributes.get('data-busy'),'false');
   assert.equal(elements.get('paper-title').textContent,'Synthetic startup check');
   assert.equal(elements.get('deepseek-model').value,'deepseek-flash');
-  assert.equal(elements.get('primary-provider').value,'deepseek');
+  assert.equal(elements.get('deepseek-enabled').checked,true);
+  assert.equal(elements.get('codex-enabled').checked,false);
   assert.equal(elements.get('status').textContent,'已载入 0 个区域；请先复核分类。');
   assert.equal(typeof uiWindow.paperWeaveBeforeShutdown,'function');
+  const profileRoot=elements.get('provider-list'),moveProfile=profileRoot.insertBefore;
+  let profileMoves=0;
+  profileRoot.insertBefore=function(...args){profileMoves++;return moveProfile.apply(this,args);};
+  elements.get('deepseek-key').value='synthetic-input-key';elements.get('deepseek-key').listeners.get('input')();
+  assert.equal(profileMoves,0,'editing a key does not move its focused profile in the DOM');
+  assert.match(elements.get('fallback-status').textContent,/调用顺序：DeepSeek/);
+  elements.get('deepseek-key').value='';
   elements.get('use-codex-proxy').listeners.get('click')();await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(elements.get('codex-base').value,'http://127.0.0.1:47771/v1');assert.equal(elements.get('codex-model').value,'codex-local');
   assert.equal(elements.get('codex-key').value,'');assert.match(elements.get('status').textContent,/保存设置/);
   assert.equal(elements.get('deepseek-model').value,'deepseek-flash','Codex preset preserves the DeepSeek profile');
-  elements.get('primary-provider').value='deepseek';
+  elements.get('codex-enabled').checked=false;
+  elements.get('deepseek-enabled').checked=true;
+  elements.get('codex-base').value='';elements.get('codex-model').value='';
+  elements.get('base').value='';elements.get('model').value='';
+  assert.equal(elements.has('primary-provider'),false,'visual order replaces the separate primary selector');
+  elements.get('deepseek-up').listeners.get('click')();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(elements.get('deepseek-priority').textContent,'优先级 1');
+  assert.equal(elements.get('deepseek-up').disabled,true);
+  elements.get('save-settings').listeners.get('click')();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.deepEqual(Array.from(storedUISettings.routing.order),['deepseek','codex','custom']);
+  assert.equal(storedUISettings.routing.enabled.codex,false);
+  assert.equal(storedUISettings.routing.codex.baseURL,'');
+  assert.equal(elements.get('deepseek-priority').textContent,'优先级 1','saved order is restored by showSettings');
+
   console.log('PASS workbench startup waits for DOM and loads settings/project');
 
   let cachedSourceReads=0,modelSettingsSaves=0;const savedRevisions=[];
@@ -547,6 +570,7 @@ try {
   for(let i=2;i<=5;i++)loadedProject.blocks.push({id:'b'+i,kind:'body',source:(i===2?'Reject':'Okay')+' GPU '+i+'.',translation:'',rects:[[0,40,600,550,700]],edited:false});
   const uiCalls=[];let acceptRejected=false;
   uiContext.fetch=async(_url,options)=>{
+    assert.equal(_url,'https://api.deepseek.com/v1/chat/completions','DeepSeek-only UI never contacts unconfigured Codex');
     const request=JSON.parse(options.body),payload=JSON.parse(request.messages[1].content);
     const reject=payload.paragraph.startsWith('Reject');uiCalls.push(reject?'reject':'okay');
     return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({translation:reject&&!acceptRejected?'本段故意漏掉保护标记。':payload.paragraph})}}]})};

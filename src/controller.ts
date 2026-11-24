@@ -54,12 +54,11 @@ export function hasKey(base: string) { return logins(base).length > 0; }
 export function apiKey(base: string) { return logins(base)[0]?.password || ''; }
 export async function saveSettings(value: Settings, key: string|Partial<Record<ProviderName,string>>, removeKey:boolean|ProviderName = false) {
   const resolved=resolveSettings(value),routing=resolved.routing;
-  for(const name of ['codex','deepseek','custom'] as const){
-    endpoint(routing[name].baseURL);
-    if(!routing[name].model)throw new Error('请填写模型名称。');
-  }
   const changes=typeof key==='string'?[{baseURL:resolved.baseURL,key,remove:removeKey===true}]:
     (['codex','deepseek','custom'] as const).map(name=>({baseURL:routing[name].baseURL,key:key[name]?.trim()||'',remove:removeKey===name}));
+  // Validate all credential destinations before changing any saved key. Empty unused
+  // profiles may be saved; task routing reports and skips incomplete profiles.
+  for(const change of changes)if(change.key||change.remove)endpoint(change.baseURL);
   for(const change of changes){
     if(!change.remove&&!change.key)continue;
     const existing = logins(change.baseURL);

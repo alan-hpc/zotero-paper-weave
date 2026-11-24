@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-alpha.35
+
+- Call enabled, complete model profiles in their visible top-to-bottom order. Add per-service enable switches and move-up/down buttons, persist the order, and migrate the previous primary provider and fallback preference.
+- Support DeepSeek alone with blank/disabled Codex and custom profiles. Skip incomplete profiles and remote profiles without saved keys, and show the effective call order before starting a task.
+- With quota fallback enabled, advance only to the next configured service on an explicit quota/balance exhaustion response. Share each transition across parallel requests; keep result-specific provider/model metadata. Normal rate limits, connection failures, authentication failures and invalid content retain their existing behavior.
+- Validate all credential destinations before saving any key, while allowing empty unused profiles. Keep credentials scoped to endpoints and outside preferences/projects.
+- Pass type checks and offline regressions for DeepSeek-only requests, ordering, skipped/disabled profiles, three-provider parallel fallback, cancellation, credentials and workbench order persistence. No real model request or Zotero installation was performed for this update.
+
 ## 0.1.0-alpha.34
 
 - Exclude detected first-page author names, affiliations, email addresses and author notes from terminology/translation requests and right-column prose. Keep their original PDF layout intact on the left.

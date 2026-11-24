@@ -12,29 +12,32 @@
   </header>
   <details id="settings-panel">
     <summary>模型与翻译偏好</summary>
-    <div class="row">
-      <label class="inline">首选服务 <select id="primary-provider"><option value="codex">Codex</option><option value="deepseek">DeepSeek API</option><option value="custom">其他兼容 API</option></select></label>
-      <label class="inline"><input id="auto-fallback" type="checkbox" />Codex 额度受限时自动切换到 DeepSeek</label>
-    </div>
-    <p class="hint">两套设置分别保存。自动切换会将尚未完成的术语或段落发送到 DeepSeek API，并按其账户计费；已有译文继续使用缓存。</p>
-    <fieldset class="provider-profile"><legend>Codex</legend><div class="settings-grid">
+    <p class="hint">按从上到下的顺序调用已启用且配置完整的服务。只用 DeepSeek 时，仅启用 DeepSeek 并填写其配置即可；其他服务可以留空。</p>
+    <label class="inline"><input id="auto-fallback" type="checkbox" />额度耗尽时按顺序切换到下一可用服务</label>
+    <p class="hint">切换会将未完成的论文文本发送到下一服务，并可能按其账户计费；已有译文继续使用缓存。</p>
+    <div id="provider-list">
+    <fieldset id="codex-profile" class="provider-profile"><legend><span id="codex-priority"></span> Codex</legend>
+    <div class="row"><label class="inline"><input id="codex-enabled" type="checkbox" />启用 Codex</label><button id="codex-up" class="subtle" aria-label="提高 Codex 优先级">上移</button><button id="codex-down" class="subtle" aria-label="降低 Codex 优先级">下移</button></div><div class="settings-grid">
       <label>Codex Base URL<input id="codex-base" type="url" placeholder="http://127.0.0.1:47771/v1" /></label>
       <label>Codex 模型<input id="codex-model" type="text" placeholder="codex-local" /></label>
       <label>Codex API Key（本机代理留空）<input id="codex-key" type="password" autocomplete="off" /></label>
     </div><div class="row"><button id="use-codex-proxy" class="subtle">填写本机 Codex 代理</button><button id="delete-codex-key" class="subtle">删除 Codex Key</button><span id="codex-key-status"></span></div></fieldset>
-    <fieldset class="provider-profile"><legend>DeepSeek API</legend><div class="settings-grid">
+    <fieldset id="deepseek-profile" class="provider-profile"><legend><span id="deepseek-priority"></span> DeepSeek API</legend>
+    <div class="row"><label class="inline"><input id="deepseek-enabled" type="checkbox" />启用 DeepSeek</label><button id="deepseek-up" class="subtle" aria-label="提高 DeepSeek 优先级">上移</button><button id="deepseek-down" class="subtle" aria-label="降低 DeepSeek 优先级">下移</button></div><div class="settings-grid">
       <label>DeepSeek Base URL<input id="deepseek-base" type="url" placeholder="https://api.deepseek.com/v1" /></label>
       <label>DeepSeek 模型<input id="deepseek-model" type="text" placeholder="deepseek-flash" /></label>
       <label>DeepSeek API Key<input id="deepseek-key" type="password" autocomplete="off" /></label>
     </div><div class="row"><button id="delete-deepseek-key" class="subtle">删除 DeepSeek Key</button><span id="deepseek-key-status"></span></div></fieldset>
-    <fieldset id="custom-profile" class="provider-profile"><legend>其他兼容 API</legend><div class="settings-grid">
-      <label>API Base URL<input id="base" type="url" placeholder="https://api.deepseek.com/v1" /></label>
-      <label>模型名称<input id="model" type="text" placeholder="deepseek-flash" /></label>
-      <label>API Key<input id="key" type="password" autocomplete="off" placeholder="留空可使用本地无密钥服务" /></label>
+    <fieldset id="custom-profile" class="provider-profile"><legend><span id="custom-priority"></span> 其他兼容 API</legend>
+    <div class="row"><label class="inline"><input id="custom-enabled" type="checkbox" />启用其他 API</label><button id="custom-up" class="subtle" aria-label="提高其他 API 优先级">上移</button><button id="custom-down" class="subtle" aria-label="降低其他 API 优先级">下移</button></div><div class="settings-grid">
+      <label>API Base URL<input id="base" type="url" placeholder="https://your-service.example/v1" /></label>
+      <label>模型名称<input id="model" type="text" placeholder="账户可用的模型 ID" /></label>
+      <label>API Key<input id="key" type="password" autocomplete="off" placeholder="本地无密钥服务可留空" /></label>
     </div><div class="row"><button id="delete-key" class="subtle">删除此端点的 Key</button><span id="key-status"></span></div></fieldset>
+    </div>
     <label>补充翻译偏好（可选）<textarea id="prompt" rows="2" placeholder="例如：行文简洁，保留原文中的所有符号。"></textarea></label>
     <div class="row"><button id="save-settings">保存全部设置</button><span id="fallback-status"></span></div>
-    <p class="hint">本机 Codex 代理需保持配套脚本运行。codex-local 使用 CLI 默认模型，也可填写具体模型 ID；Key 留空，使用 Codex 的 ChatGPT 登录。每次新任务优先尝试 Codex；额度受限后本次任务后续请求使用 DeepSeek。</p>
+    <p class="hint">本机 Codex 代理需保持配套脚本运行。codex-local 使用 CLI 默认模型，也可填写具体模型 ID；Key 留空，使用 Codex 的 ChatGPT 登录。每次新任务从列表顶部开始；额度耗尽后，本次任务后续请求继续使用切换后的服务。</p>
     <p class="hint">普通排队、临时限速和网络错误会有限重试，不触发额度切换。Key 存于 Zotero 凭据管理器；不会写入翻译项目或 PDF。</p>
   </details>
   <nav aria-label="翻译操作">

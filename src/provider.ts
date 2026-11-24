@@ -62,7 +62,8 @@ export interface RequestOptions {
 export interface ProviderOptions {
   name?:ProviderName;
   fallback?:{settings:Settings;key:string};
-  onFallback?:()=>void;
+  fallbacks?:{name:ProviderName;settings:Settings;key:string}[];
+  onFallback?:(from:ProviderName|undefined,to:ProviderName)=>void;
 }
 export class ModelServiceError extends Error {
   constructor(readonly status:number,readonly code?:string){
@@ -71,6 +72,10 @@ export class ModelServiceError extends Error {
   }
 }
 class FallbackSelected extends Error {}
+function quotaExhausted(status:number,code?:string){
+  return status===402||[403,429].includes(status)&&
+    ['codex_usage_limit','usage_limit_reached','insufficient_quota','insufficient_balance','balance_insufficient'].includes(code||'');
+}
 function addBoldMarkup(text: string, ranges: TextRange[]): string {
   let marked=text;
   for(const range of [...ranges].sort((a,b)=>b.start-a.start)) {
@@ -152,10 +157,17 @@ export class Provider {
   private jsonMode: boolean | undefined;
   private usingFallback=false;
   private fallbackClient?:Provider;
+  private fallbackProfile?:{name:ProviderName;settings:Settings;key:string};
   private sources=new WeakMap<object,TranslationSource>();
   constructor(private settings: Settings, private key: string, private signal: AbortSignal,
     private requestProgress: (request:RequestProgress|null,requestId?:string)=>void = ()=>{},private options:ProviderOptions={}) {
-    if(options.fallback)this.fallbackClient=new Provider(options.fallback.settings,options.fallback.key,signal,requestProgress,{name:'deepseek'});
+    const fallbacks=options.fallbacks||(options.fallback?[{...options.fallback,name:'deepseek' as const}]:[]);
+    this.fallbackProfile=fallbacks[0];
+    if(this.fallbackProfile){
+      const next=this.fallbackProfile;
+      this.fallbackClient=new Provider(next.settings,next.key,signal,requestProgress,
+        {name:next.name,fallbacks:fallbacks.slice(1),onFallback:options.onFallback});
+    }
   }
   private report(request:RequestProgress|null,id:string){
     this.requestProgress(request?{...request,provider:this.options.name}:null,id);
@@ -174,13 +186,14 @@ export class Provider {
     catch(error){
       this.signal.throwIfAborted();
       if(this.usingFallback)return this.fallbackClient!.json(system,payload,options);
-      const quota=this.options.name==='codex'&&error instanceof ModelServiceError&&
-        [403,429].includes(error.status)&&['codex_usage_limit','usage_limit_reached','insufficient_quota'].includes(error.code||'');
-      if(!quota||!this.options.fallback)throw error;
-      if(!this.options.fallback.key.trim())throw new Error('Codex 额度已受限，但尚未保存 DeepSeek API Key。请在模型设置中填写 DeepSeek Key；已完成段落和术语进度保留。');
+      const quota=error instanceof ModelServiceError&&quotaExhausted(error.status,error.code);
+      if(!quota||!this.fallbackProfile)throw error;
+      const next=this.fallbackProfile,url=new URL(endpoint(next.settings.baseURL));
+      if(!next.key.trim()&&!['localhost','127.0.0.1','[::1]'].includes(url.hostname))
+        throw new Error(next.name==='deepseek'?'尚未保存 DeepSeek API Key；已完成段落和术语进度保留。':'下一优先级服务尚未保存 API Key；已完成进度保留。');
       // One shared decision per task, including parallel paragraph workers and terminology batches.
       this.usingFallback=true;
-      this.options.onFallback?.();
+      this.options.onFallback?.(this.options.name,next.name);
       return this.fallbackClient!.json(system,payload,options);
     }
   }
@@ -219,8 +232,7 @@ export class Provider {
           const detail=typeof res.text==='function'?await res.text().catch(()=>''):'';
           let code:string|undefined;
           try{const parsed=JSON.parse(detail);if(typeof parsed?.error?.code==='string')code=parsed.error.code;}catch{}
-          const quota=this.options.name==='codex'&&[403,429].includes(res.status)&&
-            ['codex_usage_limit','usage_limit_reached','insufficient_quota'].includes(code||'');
+          const quota=quotaExhausted(res.status,code);
           if(quota)throw new ModelServiceError(res.status,code);
           if (res.status === 400 && useJSONMode) {
             if (/response_format|json_object/i.test(detail) && /unsupported|not supported|unknown|unrecognized|invalid|not allowed/i.test(detail)) {

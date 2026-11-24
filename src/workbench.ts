@@ -1,9 +1,10 @@
 import { Block, Kind, ModelEndpoint, Project, ProviderName, Settings, Term, EXTRACTION_VERSION, canTranslate } from './model';
-import { Provider, RequestProgress, endpoint, recordTranslation } from './provider';
+import { Provider, RequestProgress, recordTranslation } from './provider';
 import { render } from './render';
 import { formatDuration, requestProgressText } from './progress';
 import { mathReviewRequired } from './inlineMath';
-import { CODEX_DEFAULT, PROVIDER_LABELS, resolveSettings } from './settings';
+import { CODEX_DEFAULT, PROVIDERS, PROVIDER_LABELS, resolveSettings } from './settings';
+import { planProviders } from './routing';
 
 async function initialize() {
 const host = (window as any).arguments[0];
@@ -23,7 +24,9 @@ let started=0;
 const requestStates = new Map<string,{state:RequestProgress;started:number}>();
 let phaseKey='',phaseLabel='',phaseStarted=0;
 const TRANSLATION_CONCURRENCY = 3;
-const settingActions=['save-settings','use-codex-proxy','delete-key','delete-codex-key','delete-deepseek-key'];
+let providerOrder:ProviderName[]=[...PROVIDERS];
+const priorityActions=PROVIDERS.flatMap(name=>[`${name}-up`,`${name}-down`]);
+const settingActions=[...priorityActions,'save-settings','use-codex-proxy','delete-key','delete-codex-key','delete-deepseek-key'];
 const actions = ['start','terms-action','translate','retranslate','import','export','save-edit','save-terms',...settingActions,'prefer-original'];
 const profileIDs={codex:{base:'codex-base',model:'codex-model',key:'codex-key',status:'codex-key-status'},
   deepseek:{base:'deepseek-base',model:'deepseek-model',key:'deepseek-key',status:'deepseek-key-status'},
@@ -57,34 +60,45 @@ function phase(label:string,completed?:number,total?:number,unit='') {
 const termProgress=(message:string,completed:number,total:number)=>{
   phase('识别术语',completed,total,'批');status(message);
 };
+function formSettings() {
+  const profiles=Object.fromEntries(Object.entries(profileIDs).map(([name,ids])=>[name,{baseURL:input(ids.base).value.trim(),model:input(ids.model).value.trim()}])) as Record<ProviderName,ModelEndpoint>;
+  const enabled=Object.fromEntries(PROVIDERS.map(name=>[name,input(`${name}-enabled`).checked])) as Record<ProviderName,boolean>;
+  const primary=providerOrder.find(name=>enabled[name])||providerOrder[0];
+  return resolveSettings({...profiles[primary],prompt:area('prompt').value,routing:{primary,order:[...providerOrder],enabled,autoFallback:input('auto-fallback').checked,...profiles}});
+}
 function showSettings() {
-  const s=resolveSettings(host.settings());
-  input('primary-provider').value=s.routing.primary;input('auto-fallback').checked=s.routing.autoFallback;area('prompt').value=s.prompt;
-  for(const name of ['codex','deepseek','custom'] as const){
+  const s=resolveSettings(host.settings());providerOrder=[...s.routing.order];
+  input('auto-fallback').checked=s.routing.autoFallback;area('prompt').value=s.prompt;
+  for(const name of PROVIDERS){
     const ids=profileIDs[name];input(ids.base).value=s.routing[name].baseURL;input(ids.model).value=s.routing[name].model;
+    input(`${name}-enabled`).checked=s.routing.enabled[name];
   }
   configurationView();
 }
 function configurationView(){
-  const primary=input('primary-provider').value;
-  $('custom-profile').hidden=primary!=='custom';
-  input('auto-fallback').disabled=busy||primary!=='codex';
+  for(const [index,name] of providerOrder.entries()){
+    const root=$('provider-list'),card=$(`${name}-profile`);
+    if(root.children[index]!==card)root.insertBefore(card,root.children[index]||null);
+    $(`${name}-priority`).textContent=`优先级 ${index+1}`;
+    input(`${name}-up`).disabled=busy||index===0;
+    input(`${name}-down`).disabled=busy||index===providerOrder.length-1;
+  }
   for(const [name,ids] of Object.entries(profileIDs)){
     try{
       const has=host.hasKey(input(ids.base).value);
       input(ids.key).placeholder=has?'已保存；留空保留现有 Key':name==='codex'?'本机 Codex 代理留空':'输入 API Key';
       $(ids.status).textContent=has?'此端点已保存 Key':'此端点未保存 Key';
-    }catch{$(ids.status).textContent='Base URL 无效';}
+    }catch{$(ids.status).textContent='此端点尚未配置';}
   }
-  let ready=!!input('deepseek-key').value.trim();
-  try{ready ||=host.hasKey(input('deepseek-base').value);}catch{}
-  $('fallback-status').textContent=primary==='codex'&&input('auto-fallback').checked?
-    ready?'自动切换配置就绪':'自动切换需要先保存 DeepSeek API Key':'';
+  const plan=planProviders(formSettings(),base=>{
+    const pending=Object.values(profileIDs).find(ids=>input(ids.base).value.trim()===base&&input(ids.key).value.trim());
+    return pending?input(pending.key).value:host.hasKey(base)?'saved-key-present':'';
+  });
+  $('fallback-status').textContent=(plan.ready.length?`调用顺序：${plan.ready.map(p=>PROVIDER_LABELS[p.name]).join(' → ')}`:'尚无可调用服务')+
+    (plan.skipped.length?`；已跳过：${plan.skipped.map(p=>`${PROVIDER_LABELS[p.name]}（${p.reason}）`).join('、')}`:'');
 }
 async function persistSettings(remove?:ProviderName) {
-  const profiles=Object.fromEntries(Object.entries(profileIDs).map(([name,ids])=>[name,{baseURL:input(ids.base).value.trim(),model:input(ids.model).value.trim()}])) as Record<ProviderName,ModelEndpoint>;
-  const primary=input('primary-provider').value as ProviderName;
-  const settings=resolveSettings({...profiles[primary],prompt:area('prompt').value,routing:{primary,autoFallback:input('auto-fallback').checked,...profiles}});
+  const settings=formSettings();
   const keys=Object.fromEntries(Object.entries(profileIDs).map(([name,ids])=>[name,input(ids.key).value.trim()]));
   await host.saveSettings(settings,keys,remove||false);
   for(const ids of Object.values(profileIDs))input(ids.key).value='';
@@ -93,25 +107,23 @@ async function persistSettings(remove?:ProviderName) {
 }
 async function provider(signal: AbortSignal) {
   phase('准备模型设置');status('正在检查模型设置…');
-  const settings = await persistSettings();
-  const url = new URL(endpoint(settings.baseURL));
-  const key = host.apiKey(settings.baseURL);
-  if (!key && !['localhost','127.0.0.1','[::1]'].includes(url.hostname)) {
-    ($('settings-panel') as HTMLDetailsElement).open = true;
-    throw new Error('请先填写当前模型端点的 API Key。');
+  const saved = await persistSettings(),routing=saved.routing;
+  const plan=planProviders(saved,base=>host.apiKey(base));
+  if(!plan.ready.length){
+    ($('settings-panel') as HTMLDetailsElement).open=true;
+    throw new Error('没有可调用的模型服务。请至少启用一项并填写地址、模型和 API Key；本机无密钥服务可留空 Key。');
   }
-  const routing=resolveSettings(settings).routing;
-  $('provider-status').textContent=`首选服务：${PROVIDER_LABELS[routing.primary]}${routing.primary==='codex'&&routing.autoFallback?' · 额度受限时自动使用 DeepSeek':''}`;
-  return { client: new Provider(settings, key, signal,(request,requestId='request')=>{
+  const [first,...remaining]=plan.ready,settings=first.settings;
+  $('provider-status').textContent=`当前服务：${PROVIDER_LABELS[first.name]} · 按列表从上到下调用`;
+  return { client: new Provider(settings, first.key, signal,(request,requestId='request')=>{
     if(request){
       const previous=requestStates.get(requestId);
       requestStates.set(requestId,{state:request,started:previous&&previous.state.provider===request.provider&&previous.state.phase===request.phase&&previous.state.attempt===request.attempt?previous.started:Date.now()});
     } else requestStates.delete(requestId);
     tickProgress();
-  },{name:routing.primary,...(routing.primary==='codex'&&routing.autoFallback?{
-    fallback:{settings:{...routing.deepseek,prompt:settings.prompt},key:host.apiKey(routing.deepseek.baseURL)},
-    onFallback:()=>{$('provider-status').textContent='Codex 额度受限，已自动切换到 DeepSeek；本次任务后续请求使用 DeepSeek。';}
-  }:{})}), settings };
+  },{name:first.name,fallbacks:routing.autoFallback?remaining:[],
+    onFallback:(from,to)=>{$('provider-status').textContent=`${from?PROVIDER_LABELS[from]:'前一服务'}额度耗尽，已按优先级切换到 ${PROVIDER_LABELS[to]}；本次任务后续请求使用 ${PROVIDER_LABELS[to]}。`;}
+  }), settings };
 }
 const labels: Record<Kind,string> = { body:'正文', heading:'标题', figure:'图', caption:'图注 / 表注', table:'表格', math:'公式', code:'代码', reference:'参考文献', keep:'保留英文' };
 const needsReview=(block:Block)=>!(block.frontMatter&&block.kind==='keep')&&(!!block.translationNeedsRefresh||mathReviewRequired(block));
@@ -119,7 +131,7 @@ function updateControls() {
   document.body.classList.toggle('busy', busy);
   for (const id of actions) ($<HTMLButtonElement>(id)).disabled = busy || (!project && !settingActions.includes(id));
   ($<HTMLButtonElement>('cancel')).disabled = !busy;
-  const settingFields=['primary-provider','auto-fallback','prompt',...Object.values(profileIDs).flatMap(ids=>[ids.base,ids.model,ids.key])];
+  const settingFields=[...PROVIDERS.map(name=>`${name}-enabled`),'auto-fallback','prompt',...Object.values(profileIDs).flatMap(ids=>[ids.base,ids.model,ids.key])];
   for (const id of ['kind','translation','terms','make-preferred',...settingFields]) (input(id)).disabled = busy || (!project && !settingFields.includes(id));
   configurationView();
   area('translation').disabled = busy || !selected || !canTranslate(selected);
@@ -209,7 +221,7 @@ function bind(id: string, fn: () => void | Promise<void>) {
 bind('save-settings', async () => { await persistSettings(); status('模型设置已保存。'); });
 bind('use-codex-proxy',()=>{
   input('codex-base').value=CODEX_DEFAULT.baseURL;input('codex-model').value=CODEX_DEFAULT.model;input('codex-key').value='';
-  input('primary-provider').value='codex';configurationView();
+  input('codex-enabled').checked=true;providerOrder=['codex',...providerOrder.filter(name=>name!=='codex')];configurationView();
   status('已填写本机代理。请先启动配套代理脚本，再点击「保存设置」。');
 });
 bind('delete-key', async () => { await persistSettings('custom'); status('已删除自定义端点的 Key。'); });
@@ -350,9 +362,17 @@ $('translation').addEventListener('input', () => { if (selected) {
 $('kind').addEventListener('change', () => { if (selected) { selected.kind = ($<HTMLSelectElement>('kind')).value as Kind; selected.kindEdited=true; changed(); list(); updateControls(); } });
 for(const ids of Object.values(profileIDs)){
   input(ids.base).addEventListener('change',configurationView);
+  input(ids.model).addEventListener('change',configurationView);
   input(ids.key).addEventListener('input',configurationView);
 }
-input('primary-provider').addEventListener('change',configurationView);
+for(const name of PROVIDERS){
+  input(`${name}-enabled`).addEventListener('change',configurationView);
+  for(const [direction,delta] of [['up',-1],['down',1]] as const)bind(`${name}-${direction}`,()=>{
+    const index=providerOrder.indexOf(name),next=index+delta;
+    if(next<0||next>=providerOrder.length)return;
+    [providerOrder[index],providerOrder[next]]=[providerOrder[next],providerOrder[index]];configurationView();
+  });
+}
 input('auto-fallback').addEventListener('change',configurationView);
 window.addEventListener('beforeunload', event => {
   if (busy || dirty) { event.preventDefault(); event.returnValue = ''; }

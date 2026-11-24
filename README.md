@@ -12,7 +12,7 @@
 
 ## 安装
 
-> 最新预览版：[**0.1.0-alpha.34**](https://github.com/alan-hpc/zotero-paper-weave/releases/tag/v0.1.0-alpha.34)。这是早期试用版，alpha.34 尚未完成 Zotero 内安装验收；Alpha 更新需手动下载安装。
+> 当前主分支为 **alpha.35**，新增模型服务优先级，安装包正在准备。最新已发布预览版为 [alpha.34](https://github.com/alan-hpc/zotero-paper-weave/releases/tag/v0.1.0-alpha.34)。这是早期试用项目，Alpha 更新需手动下载安装。
 
 1. 安装 **Zotero 10**。
 2. 下载 [alpha.34 安装包 `.xpi`](https://github.com/alan-hpc/zotero-paper-weave/releases/download/v0.1.0-alpha.34/paperweave-0.1.0-alpha.34.xpi)，或从 [Releases](https://github.com/alan-hpc/zotero-paper-weave/releases) 选择版本。
@@ -21,7 +21,7 @@
 ## 第一次翻译
 
 1. 选中一个 PDF 附件或包含 PDF 的论文条目，右键选择「**PaperWeave · 逐段双语 PDF / 修订**」。
-2. 展开「**模型与翻译偏好**」，选择首选服务并填写配置：
+2. 展开「**模型与翻译偏好**」，启用要使用的服务并填写配置（只用 DeepSeek 时，仅启用 DeepSeek）：
 
 | 设置 | DeepSeek API | 本机 Codex 代理 |
 | --- | --- | --- |
@@ -34,9 +34,11 @@
 3. 点击「**保存全部设置**」，然后点击「**翻译并生成 PDF**」。插件会识别本文术语、逐段翻译并生成附件。
 4. 生成后直接在 Zotero 阅读新 PDF。默认将它设为这篇论文优先打开的附件，原始 PDF 仍然保留。
 
-同时配置两种服务后，可以勾选「**Codex 额度受限时自动切换到 DeepSeek**」。仅明确的额度错误会触发切换；普通排队、临时限速或连接失败仍按原服务重试。DeepSeek API 按其账户计费。
+服务按**从上到下的优先级**调用，用「上移 / 下移」调整后保存；未启用或配置不完整的服务会跳过。只配置 DeepSeek 就能使用，不需要 Codex。
 
-也支持在首选服务中选择「其他兼容 API」，填写自己的 Chat Completions 接口。
+勾选「**额度耗尽时按顺序切换到下一可用服务**」后，明确的额度或余额耗尽会触发切换，下一服务可能计费。普通排队、临时限速或连接失败仍按原服务重试。
+
+也可启用「其他兼容 API」，填写自己的 Chat Completions 接口。
 
 ## 修改译文、继续翻译
 

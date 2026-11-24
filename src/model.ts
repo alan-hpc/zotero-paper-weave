@@ -67,6 +67,8 @@ export type ProviderName = 'codex' | 'deepseek' | 'custom';
 export interface ModelEndpoint { baseURL: string; model: string }
 export interface ModelRouting {
   primary: ProviderName;
+  order: ProviderName[];
+  enabled: Record<ProviderName,boolean>;
   autoFallback: boolean;
   codex: ModelEndpoint;
   deepseek: ModelEndpoint;

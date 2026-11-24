@@ -4,6 +4,7 @@ export async function verifyFallback(moduleFor){
   const {Provider,recordTranslation}=await moduleFor('src/provider.ts');
   const {resolveSettings,CODEX_DEFAULT,DEEPSEEK_DEFAULT}=await moduleFor('src/settings.ts');
   const {requestProgressText}=await moduleFor('src/progress.ts');
+  const {planProviders}=await moduleFor('src/routing.ts');
   const settings=resolveSettings({...CODEX_DEFAULT,prompt:'Keep all identifiers.'});
   assert.equal(settings.routing.primary,'codex');assert.equal(settings.routing.autoFallback,true);
   assert.deepEqual(settings.routing.deepseek,DEEPSEEK_DEFAULT);
@@ -11,9 +12,28 @@ export async function verifyFallback(moduleFor){
   assert.equal(legacy.routing.deepseek.model,'my-deepseek-model');assert.equal(legacy.routing.primary,'deepseek');
   const custom=resolveSettings({baseURL:'https://example.test/v1',model:'old-model',prompt:''});
   assert.equal(custom.routing.primary,'custom');assert.equal(custom.baseURL,'https://example.test/v1');
-  const switched=resolveSettings({...settings,routing:{...settings.routing,primary:'deepseek'}});
+  const switched=resolveSettings({...settings,routing:{...settings.routing,order:['deepseek','codex','custom']}});
   assert.equal(switched.baseURL,DEEPSEEK_DEFAULT.baseURL);assert.deepEqual(switched.routing.codex,CODEX_DEFAULT);
   assert.ok(!JSON.stringify(resolveSettings({...settings,key:'secret',routing:{...settings.routing,deepseek:{...DEEPSEEK_DEFAULT,key:'secret'}}})).includes('secret'));
+
+  const onlyDeepSeek=resolveSettings({...legacy,routing:{...legacy.routing,
+    codex:{baseURL:'',model:''},custom:{baseURL:'',model:''}}});
+  const keyLookups=[];
+  const singlePlan=planProviders(onlyDeepSeek,base=>{keyLookups.push(base);return 'deepseek-key';});
+  assert.deepEqual(singlePlan.ready.map(p=>p.name),['deepseek']);
+  assert.deepEqual(keyLookups,[DEEPSEEK_DEFAULT.baseURL],'unused Codex/custom profiles are not queried');
+  const ordered=resolveSettings({...settings,routing:{...settings.routing,
+    order:['custom','deepseek','codex','custom','unknown'],enabled:{codex:true,deepseek:true,custom:true},
+    custom:{baseURL:'https://custom.test/v1',model:'first-model'}}});
+  assert.deepEqual(ordered.routing.order,['custom','deepseek','codex']);
+  const orderedPlan=planProviders(ordered,base=>base.startsWith('https:')?'test-key':'');
+  assert.deepEqual(orderedPlan.ready.map(p=>p.name),['custom','deepseek','codex']);
+  const skippedPlan=planProviders({...ordered,routing:{...ordered.routing,
+    codex:{baseURL:'',model:''}}},base=>base===DEEPSEEK_DEFAULT.baseURL?'deepseek-key':'');
+  assert.deepEqual(skippedPlan.ready.map(p=>p.name),['deepseek']);
+  assert.deepEqual(skippedPlan.skipped.map(p=>p.name),['custom','codex']);
+  assert.equal(planProviders({...onlyDeepSeek,routing:{...onlyDeepSeek.routing,
+    enabled:{codex:false,deepseek:false,custom:false}}},()=>{throw new Error('disabled credential lookup');}).ready.length,0);
 
   const original=globalThis.fetch;
   const good=value=>({ok:true,json:async()=>({choices:[{message:{content:JSON.stringify(value)}}]})});
@@ -24,6 +44,29 @@ export async function verifyFallback(moduleFor){
   const fallback={settings:{...DEEPSEEK_DEFAULT,prompt:settings.prompt},key:'deepseek-only-test-key'};
   const make=(opts={},signal=new AbortController().signal,progress=()=>{})=>new Provider(settings,'codex-only-test-key',signal,progress,{name:'codex',fallback,...opts});
   try{
+    const singleCalls=[];
+    globalThis.fetch=async(url)=>{singleCalls.push(url);return good({translation:'DeepSeek only'});};
+    const only=singlePlan.ready[0];
+    await new Provider(only.settings,only.key,new AbortController().signal,()=>{},{name:only.name}).json('test',{},requestOptions);
+    assert.deepEqual(singleCalls,[DEEPSEEK_DEFAULT.baseURL+'/chat/completions']);
+
+    const chainCalls=[],chainSwitches=[];
+    globalThis.fetch=async(url,request)=>{
+      chainCalls.push(url);
+      if(url.startsWith('https://custom.test'))return bad(402,'payment_required');
+      if(url.startsWith(DEEPSEEK_DEFAULT.baseURL))return bad(429,'insufficient_quota');
+      assert.equal(request.headers.Authorization,undefined,'local Codex may use no key');
+      return good({translation:'third provider'});
+    };
+    const [head,...tail]=orderedPlan.ready;
+    const chain=new Provider(head.settings,head.key,new AbortController().signal,()=>{},
+      {name:head.name,fallbacks:tail,onFallback:(from,to)=>chainSwitches.push([from,to])});
+    await Promise.all([1,2,3].map(n=>chain.json('test',{paragraph:n},requestOptions)));
+    assert.deepEqual(chainSwitches,[['custom','deepseek'],['deepseek','codex']]);
+    const before=chainCalls.length;
+    await chain.json('test',{paragraph:'later'},requestOptions);
+    assert.deepEqual(chainCalls.slice(before),[CODEX_DEFAULT.baseURL+'/chat/completions'],'later work stays on the selected fallback');
+
     const calls=[],events=[];let switches=0;
     globalThis.fetch=async(url,request)=>{
       const body=JSON.parse(request.body),payload=JSON.parse(body.messages[1].content);calls.push({url,request,body,payload});
@@ -108,6 +151,16 @@ export async function verifyFallback(moduleFor){
     assert.equal(controller.hasKey(CODEX_DEFAULT.baseURL),false);assert.equal(controller.apiKey(DEEPSEEK_DEFAULT.baseURL),'new-deepseek-key');
     assert.ok(!JSON.stringify([...prefs]).includes('-key'),'preference JSON contains no credentials');
     assert.equal(controller.settings().routing.autoFallback,true);assert.equal(controller.settings().routing.primary,'codex');
+    await controller.saveSettings(onlyDeepSeek,{deepseek:''});
+    assert.equal(controller.settings().routing.codex.baseURL,'','empty disabled profiles can be saved');
+    assert.deepEqual(controller.settings().routing.order,onlyDeepSeek.routing.order);
+    assert.equal(controller.settings().routing.enabled.codex,false);
+    assert.equal(controller.apiKey(DEEPSEEK_DEFAULT.baseURL),'new-deepseek-key','clearing unused profiles preserves active credentials');
+    const beforeKeys=JSON.stringify([...logins]);
+    await assert.rejects(controller.saveSettings({...onlyDeepSeek,routing:{...onlyDeepSeek.routing,
+      custom:{baseURL:'http://untrusted.test/v1',model:'invalid'}}},{deepseek:'must-not-save',custom:'invalid-key'}),/HTTPS/);
+    assert.equal(JSON.stringify([...logins]),beforeKeys,'an invalid credential destination cannot partially save other keys');
+
   }finally{Object.assign(globalThis,old);}
-  console.log('PASS dual providers: settings migration, credential isolation, quota-only task fallback, parallel provenance, retries, cancellation, resumable terms and disabled/missing-key failure paths');
+  console.log('PASS ordered providers: DeepSeek-only, skip incomplete/disabled, persistent order, three-hop parallel fallback; settings migration, credential isolation, quota-only task fallback, parallel provenance, retries, cancellation, resumable terms and disabled/missing-key failure paths');
 }
