@@ -12,10 +12,10 @@
 
 ## 安装
 
-> 当前主分支为 **alpha.34**，对应 Release 安装包尚未发布。要使用本文介绍的最新功能，请先[从源码构建](#从源码构建)；已发布版本可在 Releases 下载，功能可能有所不同。
+> 最新预览版：[**0.1.0-alpha.34**](https://github.com/alan-hpc/zotero-paper-weave/releases/tag/v0.1.0-alpha.34)。这是早期试用版，alpha.34 尚未完成 Zotero 内安装验收；Alpha 更新需手动下载安装。
 
 1. 安装 **Zotero 10**。
-2. 从 [Releases](https://github.com/alan-hpc/zotero-paper-weave/releases) 下载 `.xpi`，或使用源码构建的安装包。
+2. 下载 [alpha.34 安装包 `.xpi`](https://github.com/alan-hpc/zotero-paper-weave/releases/download/v0.1.0-alpha.34/paperweave-0.1.0-alpha.34.xpi)，或从 [Releases](https://github.com/alan-hpc/zotero-paper-weave/releases) 选择版本。
 3. 在 Zotero 中打开「**工具 → 插件 → 齿轮 → 从文件安装插件**」，选择 `.xpi`，然后重启 Zotero。
 
 ## 第一次翻译
