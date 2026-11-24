@@ -23,6 +23,48 @@ const pref = 'extensions.paperweave.';
 const origin = 'chrome://paperweave';
 const realm = (base: string) => endpoint(base);
 const directory = () => PathUtils.join(Zotero.DataDirectory.dir, 'paperweave');
+const WORKBENCH_URL='chrome://paperweave/content/workbench.xhtml';
+const WORKBENCH_NAME='paperweave-workbench';
+interface WorkbenchRegistry { schema:1; windows:Set<any>; opening?:Promise<void> }
+function workbenchRegistry():WorkbenchRegistry {
+  const saved=Zotero.__paperWeaveWorkbenchRegistry;
+  if(saved?.schema===1&&typeof saved.windows?.add==='function')return saved;
+  const created:WorkbenchRegistry={schema:1,windows:new Set()};
+  Zotero.__paperWeaveWorkbenchRegistry=created;
+  return created;
+}
+function confirmedClosed(w:any):boolean {
+  try{if(typeof Cu!=='undefined'&&Cu.isDeadWrapper?.(w))return true;}catch{}
+  // An inaccessible WindowProxy is not evidence that its window has closed.
+  try{return w.closed===true;}catch{return false;}
+}
+function isWorkbench(w:any):boolean {
+  try{if(w.name===WORKBENCH_NAME)return true;}catch{}
+  try{if(w.document?.documentElement?.getAttribute('windowtype')==='paperweave:workbench')return true;}catch{}
+  for(const read of [()=>w.location?.href,()=>w.document?.documentURI]){
+    try{if(read()?.split(/[?#]/,1)[0]===WORKBENCH_URL)return true;}catch{}
+  }
+  return false;
+}
+function workbenchWindows():any[] {
+  const shared=workbenchRegistry(),found=new Set<any>([...windows.values(),...shared.windows]);
+  try{
+    const enumerator=Services.wm?.getEnumerator(null);
+    if(enumerator&&typeof enumerator[Symbol.iterator]==='function'){
+      for(const w of enumerator)if(isWorkbench(w))found.add(w);
+    }else if(enumerator){
+      while(enumerator.hasMoreElements()){
+        const w=enumerator.getNext();if(isWorkbench(w))found.add(w);
+      }
+    }
+  }catch{}
+  for(const w of found){
+    if(confirmedClosed(w)){found.delete(w);shared.windows.delete(w);}
+    else shared.windows.add(w);
+  }
+  for(const [key,w]of windows)if(!found.has(w))windows.delete(key);
+  return [...found];
+}
 
 export async function start(m: typeof meta) {
   meta = m; active = true;stopping=false;lifecycle++;
@@ -238,9 +280,7 @@ async function chooseItem(window: any) {
   return sourceOf(item);
 }
 function focusWorkbench():boolean {
-  for(const [key,w]of windows) {
-    try { if(w.closed){windows.delete(key);continue;} }
-    catch { windows.delete(key);continue; }
+  for(const w of workbenchWindows()) {
     // A live window still owns the slot if the host cannot restore or focus it.
     try { if(typeof w.STATE_MINIMIZED==='number'&&w.windowState===w.STATE_MINIMIZED)w.restore?.(); } catch {}
     try { w.focus(); } catch {}
@@ -251,27 +291,33 @@ function focusWorkbench():boolean {
 export async function openWorkbench(window: any, itemID?: number) {
   if(!active||stopping)return;
   if(focusWorkbench())return;
-  if(workbenchOpening){await workbenchOpening.catch(()=>{});focusWorkbench();return;}
+  const shared=workbenchRegistry();
+  if(shared.opening){await shared.opening.catch(()=>{});focusWorkbench();return;}
   const generation=lifecycle;
-  const opening=(async()=>{
+  // Publish the process-wide guard before any asynchronous lookup or host reentry.
+  const opening=Promise.resolve().then(async()=>{
+    if(!active||stopping||generation!==lifecycle)return;
     const item = itemID ? await sourceOf(await Zotero.Items.getAsync(itemID)) : await chooseItem(window);
     if(!active||stopping||generation!==lifecycle||focusWorkbench())return;
     const key = `${item.libraryID}:${item.key}`;
     const bridge = { item, meta, settings, hasKey, apiKey, saveSettings, loadProject, saveProject,
       sourceBytes, fontBytes, monoFontBytes, attachPDF, preferBilingual, preferOriginal, exportProject, importProject, acquire };
-    const w = window.openDialog('chrome://paperweave/content/workbench.xhtml', '',
+    const w = window.openDialog(WORKBENCH_URL, WORKBENCH_NAME,
       'chrome,resizable,centerscreen,width=1140,height=840', bridge);
+    if(!w)throw new Error('无法打开 PaperWeave 工作台。');
     windows.set(key, w);
-    w.addEventListener('unload', (event:any) => {
-      if(event?.target&&event.target!==w.document)return;
-      if(windows.get(key)===w)windows.delete(key);
-    });
-  })();
-  workbenchOpening=opening;
+    shared.windows.add(w);
+    // about:blank and document navigation also emit top-level unload. Release
+    // the slot only after a confirmed window close, checked on the next action.
+  });
+  workbenchOpening=opening;shared.opening=opening;
   try {
     await opening;
   } catch (e: any) { Services.prompt.alert(window, 'PaperWeave', e.message); }
-  finally { if(workbenchOpening===opening)workbenchOpening=undefined; }
+  finally {
+    if(workbenchOpening===opening)workbenchOpening=undefined;
+    if(shared.opening===opening)shared.opening=undefined;
+  }
 }
 export function attach(window: any) {
   if (menus.has(window)) return;
@@ -309,8 +355,9 @@ export function detach(window: any) {
 }
 export async function stop() {
   stopping=true;lifecycle++;
-  await Promise.allSettled([...windows.values()].map(async w => {
-    try { if (!w.closed) await w.paperWeaveBeforeShutdown?.(); } catch {}
+  const shared=workbenchRegistry(),liveWindows=workbenchWindows();
+  await Promise.allSettled(liveWindows.map(async w => {
+    try { await w.paperWeaveBeforeShutdown?.(); } catch {}
   }));
   active = false;
   await preferred?.uninstall();
@@ -318,7 +365,11 @@ export async function stop() {
   toolbarHandler = undefined;
   for (const button of readerButtons) { try { button.remove(); } catch {} }
   readerButtons.clear();
-  for (const w of windows.values()) { try { if (!w.closed) w.close(); } catch {} }
+  for (const w of liveWindows) {
+    try { if (!confirmedClosed(w)) w.close(); } catch {}
+    if(confirmedClosed(w))shared.windows.delete(w);
+  }
+  if(shared.opening===workbenchOpening)shared.opening=undefined;
   windows.clear(); locks.clear();workbenchOpening=undefined;
   for (const w of menus.keys()) detach(w);
 }

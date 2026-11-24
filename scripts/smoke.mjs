@@ -8,8 +8,8 @@ import { pathToFileURL } from 'node:url';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
 const temporary=await mkdtemp(join(tmpdir(),'paperweave-smoke-'));
-async function moduleFor(file) {
-  const output=join(temporary,file.replaceAll('/','-')+'.mjs');
+async function moduleFor(file,suffix='') {
+  const output=join(temporary,file.replaceAll('/','-')+suffix+'.mjs');
   await build({entryPoints:[file],outfile:output,bundle:true,platform:'node',format:'esm',target:'node20'});
   return import(pathToFileURL(output));
 }
@@ -26,6 +26,8 @@ try {
   await verifyFrontMatter(moduleFor);
   const {verifyCodexProxy}=await import('./codex-proxy-regression.mjs');
   await verifyCodexProxy();
+  const {verifyWorkbenchWindows}=await import('./workbench-window-regression.mjs');
+  await verifyWorkbenchWindows(moduleFor);
   const {PreferredAttachments}=await moduleFor('src/preferred.ts');
   const prefs=new Map();const parents=new Map();
   class Item {
@@ -130,6 +132,7 @@ try {
     let resolveItem;
     lookup=id=>new Promise(resolve=>{resolveItem=()=>resolve({id,libraryID:1,key:`PDF${id}`});});
     const firstOpen=openWorkbench(main,1),concurrentOpen=openWorkbench(main,2);
+    await Promise.resolve();
     assert.deepEqual(lookups,[1],'concurrent requests share the first item lookup');
     resolveItem();await Promise.all([firstOpen,concurrentOpen]);
     assert.equal(opened.length,1,'concurrent clicks create one workbench');
@@ -155,6 +158,7 @@ try {
     await startWorkbench();
     lookup=id=>new Promise(resolve=>{resolveItem=()=>resolve({id,libraryID:1,key:`PDF${id}`});});
     const lateOpen=openWorkbench(main,4);
+    await Promise.resolve();
     await controllerStop();await openWorkbench(main,5);
     await startWorkbench();
     lookup=async id=>({id,libraryID:1,key:`PDF${id}`});

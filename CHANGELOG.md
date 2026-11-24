@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-alpha.36
+
+- Keep the workbench singleton through initial document unloads and navigation. Release ownership only after the native window is confirmed closed or its wrapper is dead; a temporary WindowProxy access failure no longer permits another window.
+- Discover existing workbenches through Zotero's native window mediator, including windows absent from a controller's local registry. Share pending opens and window references on the Zotero host across controller scopes and main windows, with a stable native window name and type.
+- Repeated actions restore/focus the existing project without changing the paper or task. Shutdown saves and closes discovered workbenches, and failed/cancelled opens release only their own guard.
+- Reproduce the duplicate-window path against alpha.35's implementation, then pass new regressions for top-level unload, native discovery, transient/dead wrappers, independent controller scopes, concurrent opens and failed native opens. Full offline checks and packaging pass; no real translation or in-app installation acceptance is claimed.
+
 ## 0.1.0-alpha.35
 
 - Call enabled, complete model profiles in their visible top-to-bottom order. Add per-service enable switches and move-up/down buttons, persist the order, and migrate the previous primary provider and fallback preference.
