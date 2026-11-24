@@ -12,10 +12,10 @@
 
 ## 安装
 
-> 最新预览版：[**0.1.0-alpha.35**](https://github.com/alan-hpc/zotero-paper-weave/releases/tag/v0.1.0-alpha.35)。这是早期试用版，alpha.35 尚未完成 Zotero 内安装验收；Alpha 更新需手动下载安装。
+> 最新预览版：[**0.1.0-alpha.37**](https://github.com/alan-hpc/zotero-paper-weave/releases/tag/v0.1.0-alpha.37)。这是早期试用版，alpha.37 尚未完成 Zotero 内安装验收；Alpha 更新需手动下载安装。
 
 1. 安装 **Zotero 10**。
-2. 下载 [alpha.35 安装包 `.xpi`](https://github.com/alan-hpc/zotero-paper-weave/releases/download/v0.1.0-alpha.35/paperweave-0.1.0-alpha.35.xpi)，或从 [Releases](https://github.com/alan-hpc/zotero-paper-weave/releases) 选择版本。
+2. 下载 [alpha.37 安装包 `.xpi`](https://github.com/alan-hpc/zotero-paper-weave/releases/download/v0.1.0-alpha.37/paperweave-0.1.0-alpha.37.xpi)，或从 [Releases](https://github.com/alan-hpc/zotero-paper-weave/releases) 选择版本。
 3. 在 Zotero 中打开「**工具 → 插件 → 齿轮 → 从文件安装插件**」，选择 `.xpi`，然后重启 Zotero。
 
 ## 第一次翻译
