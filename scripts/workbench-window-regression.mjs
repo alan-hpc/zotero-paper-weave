@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 export async function verifyWorkbenchWindows(moduleFor){
   const saved=new Map(['Zotero','Services','IOUtils','PathUtils','Cu'].map(k=>[k,globalThis[k]]));
   const controllers=[],nativeWindows=[],created=[],alerts=[];
-  let lookup=async id=>({id,libraryID:1,key:`PDF${id}`});
+  const itemFor=id=>({id,libraryID:1,key:`PDF${id}`,isPDFAttachment:()=>true,getField:()=>`Paper ${id}`});
+  let lookup=async id=>itemFor(id);
   class Item {async getBestAttachments(){return [];}}
   function dialog(bridge){
     const events=new Map();
     const w={closed:false,location:{href:'chrome://paperweave/content/workbench.xhtml'},
       document:{documentURI:'chrome://paperweave/content/workbench.xhtml',documentElement:{getAttribute:()=>''}},
-      bridge,focusCount:0,saveCount:0,STATE_MINIMIZED:2,windowState:0,
+      bridge,arguments:[bridge],paperWeaveGetState:()=>({binding:bridge.binding||bridge.item,title:'Running paper',busy:true}),paperWeavePrepareSwitch:async()=>false,focusCount:0,saveCount:0,STATE_MINIMIZED:2,windowState:0,
       addEventListener(name,listener){events.set(name,listener);},
       focus(){this.focusCount++;},restore(){this.windowState=0;},
       close(){this.closed=true;events.get('unload')?.({target:this.document});},
@@ -48,7 +49,7 @@ export async function verifyWorkbenchWindows(moduleFor){
     assert.equal(created.length,1,'a temporarily unreadable live WindowProxy still owns the slot');
     unreadable=false;Object.defineProperty(first,'closed',{configurable:true,writable:true,value:true});
 
-    const orphan=dialog({item:{id:99}});
+    const orphan=dialog({item:itemFor(99)});
     nativeWindows.push({closed:false,location:{href:'https://example.test/'},document:{documentElement:{getAttribute:()=>''}}},orphan);
     globalThis.Zotero.__paperWeaveWorkbenchRegistry=new Proxy({}, {get(){throw new Error('dead add-on sandbox');}});
     await a.openWorkbench(main(),3);
@@ -63,24 +64,25 @@ export async function verifyWorkbenchWindows(moduleFor){
     const b=await moduleFor('src/controller.ts','window-b');controllers.push(b);
     await b.start({id:'singleton-test',version:'test',rootURI:'file:///addon/'});
     const resolvers=[];
-    lookup=id=>new Promise(resolve=>resolvers.push(()=>resolve({id,libraryID:1,key:`PDF${id}`})));
+    lookup=id=>new Promise(resolve=>resolvers.push(()=>resolve(itemFor(id))));
     const one=a.openWorkbench(main(),4),two=b.openWorkbench(main(),5);
-    await Promise.resolve();
+    await new Promise(resolve=>setTimeout(resolve,0));
     assert.equal(resolvers.length,1,'independent controller scopes share the opening guard before the host registers a window');
     resolvers[0]();await Promise.all([one,two]);
+    lookup=async id=>itemFor(id);
     assert.equal(created.length,2,'different Zotero main windows/controllers create only one new workbench');
     const shared=created.at(-1);
     await b.openWorkbench(main(),6);
     assert.equal(created.length,2,'another controller discovers a live window before item lookup');
-    assert.equal(shared.bridge.item.id,4);
-    assert.equal(shared.name,'paperweave-workbench','the native window has a stable name');
-    shared.close();lookup=async id=>({id,libraryID:1,key:`PDF${id}`});
+    assert.equal(shared.bridge.item.id,5,'the latest pending open owns the newly created session');
+    assert.ok(shared.name.startsWith('paperweave-workbench-'),'each document session has a fresh native target');
+    shared.close();lookup=async id=>(itemFor(id));
     await b.openWorkbench(main(),7);assert.equal(created.length,3,'a confirmed close releases the shared slot');
     const last=created.at(-1);last.dead=true;
     await b.openWorkbench(main(),8);assert.equal(created.length,4,'dead wrappers do not block reopening');
-    assert.deepEqual(alerts,[]);
+    assert.ok(alerts.every(message=>/正在处理或保存/.test(message)));
     created.at(-1).close();
-    const loading=dialog({item:{id:100}});
+    const loading=dialog({item:itemFor(100)});
     loading.location.href='about:blank';loading.document.documentURI='about:blank';
     loading.document.documentElement.getAttribute=name=>name==='windowtype'?'paperweave:workbench':'';
     globalThis.Services.wm.getEnumerator=()=>[loading];
@@ -88,7 +90,7 @@ export async function verifyWorkbenchWindows(moduleFor){
     assert.equal(created.length,4,'an iterable native enumerator finds a marked window during navigation');
     assert.equal(loading.focusCount,1);loading.close();
     await b.openWorkbench({openDialog:()=>null},10);
-    assert.deepEqual(alerts,['无法打开 PaperWeave 工作台。']);
+    assert.equal(alerts.at(-1),'无法打开 PaperWeave 工作台。');
     await b.openWorkbench(main(),11);
     assert.equal(created.length,5,'a failed native window open releases the process-wide guard');
   }finally{

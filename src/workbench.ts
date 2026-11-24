@@ -14,6 +14,7 @@ const area = (id: string) => $<HTMLTextAreaElement>(id);
 let project: Project | null = null;
 let selected: Block | undefined;
 let busy = false;
+let switching = false;
 let dirty = false;
 let revision = 0;
 let saving = Promise.resolve();
@@ -80,8 +81,8 @@ function configurationView(){
     const root=$('provider-list'),card=$(`${name}-profile`);
     if(root.children[index]!==card)root.insertBefore(card,root.children[index]||null);
     $(`${name}-priority`).textContent=`优先级 ${index+1}`;
-    input(`${name}-up`).disabled=busy||index===0;
-    input(`${name}-down`).disabled=busy||index===providerOrder.length-1;
+    input(`${name}-up`).disabled=busy||switching||index===0;
+    input(`${name}-down`).disabled=busy||switching||index===providerOrder.length-1;
   }
   for(const [name,ids] of Object.entries(profileIDs)){
     try{
@@ -128,14 +129,15 @@ async function provider(signal: AbortSignal) {
 const labels: Record<Kind,string> = { body:'正文', heading:'标题', figure:'图', caption:'图注 / 表注', table:'表格', math:'公式', code:'代码', reference:'参考文献', keep:'保留英文' };
 const needsReview=(block:Block)=>!(block.frontMatter&&block.kind==='keep')&&(!!block.translationNeedsRefresh||mathReviewRequired(block));
 function updateControls() {
-  document.body.classList.toggle('busy', busy);
-  for (const id of actions) ($<HTMLButtonElement>(id)).disabled = busy || (!project && !settingActions.includes(id));
+  const locked=busy||switching;
+  document.body.classList.toggle('busy', locked);
+  for (const id of actions) ($<HTMLButtonElement>(id)).disabled = locked || (!project && !settingActions.includes(id));
   ($<HTMLButtonElement>('cancel')).disabled = !busy;
   const settingFields=[...PROVIDERS.map(name=>`${name}-enabled`),'auto-fallback','prompt',...Object.values(profileIDs).flatMap(ids=>[ids.base,ids.model,ids.key])];
-  for (const id of ['kind','translation','terms','make-preferred',...settingFields]) (input(id)).disabled = busy || (!project && !settingFields.includes(id));
+  for (const id of ['kind','translation','terms','make-preferred',...settingFields]) (input(id)).disabled = locked || (!project && !settingFields.includes(id));
   configurationView();
-  area('translation').disabled = busy || !selected || !canTranslate(selected);
-  $<HTMLButtonElement>('retranslate').disabled = busy || !selected || !canTranslate(selected);
+  area('translation').disabled = locked || !selected || !canTranslate(selected);
+  $<HTMLButtonElement>('retranslate').disabled = locked || !selected || !canTranslate(selected);
 }
 function list() {
   const root = $('block-list'); root.replaceChildren();
@@ -195,7 +197,7 @@ function changed() {
   clearTimeout(autosave); autosave = setTimeout(() => { void save().catch(e => status(e.message,true)); }, 500);
 }
 async function run(job: (signal: AbortSignal) => Promise<void>) {
-  if (busy) return;
+  if (busy||switching) return;
   busy = true; abort = new AbortController();
   started=Date.now();requestStates.clear();phase('准备任务');status('正在准备任务…');
   $('provider-status').textContent='本次任务尚未请求模型。';
@@ -383,12 +385,30 @@ window.addEventListener('unload', () => { abort?.abort(); clearTimeout(autosave)
   await save();
   busy = false; dirty = false;
 };
+const currentTitle=()=>project?.source.title||host.binding?.title||$('paper-title').textContent||'当前论文';
+(window as any).paperWeaveGetState=()=>({binding:host.binding||host.item,title:currentTitle(),busy,switching});
+(window as any).paperWeaveCancelSwitch=()=>{switching=false;updateControls();};
+(window as any).paperWeavePrepareSwitch=async(target:{title:string})=>{
+  if(busy||switching){status(`《${currentTitle()}》正在处理，请等待完成或取消后再打开《${target.title}》。`);return false;}
+  switching=true;updateControls();status(`正在保存《${currentTitle()}》，准备打开《${target.title}》…`);
+  try{
+    await save();
+    if(dirty)throw new Error('修订尚未完成保存，已保留当前论文，请先保存后再切换。');
+    return true;
+  }catch(error:any){switching=false;updateControls();status(`未能保存当前论文，已停止切换：${error.message}`,true);throw error;}
+};
   showSettings(); updateControls();
   input('make-preferred').checked = host.preferBilingual();
-  $('paper-title').textContent = host.item.getField('title');
+  $('paper-title').textContent = host.binding?.title||host.item.parentItem?.getField('title')||host.item.getField('title');
+  document.title=`PaperWeave · ${$('paper-title').textContent}`;
   await run(async signal => {
     phase('读取 PDF 项目');status('正在读取论文项目…');
-    project = await host.loadProject(host.item,status,signal);
+    const loaded=await host.loadProject(host.item,status,signal);
+    if(host.binding&&(loaded.source.libraryID!==host.binding.libraryID||loaded.source.key!==host.binding.key))
+      throw new Error('返回的译文项目与目标论文不一致，已停止载入，请重新打开目标 PDF。');
+    project=loaded;
+    $('paper-title').textContent=project!.source.title||$('paper-title').textContent;
+    document.title=`PaperWeave · ${$('paper-title').textContent}`;
     status(`已载入 ${project!.blocks.length} 个区域；请先复核分类。`);
     if (project!.pages.some(p => p.extractionDegraded)) status('部分页面的版面分析已降级，请对照左侧原页逐项复核。');
     const refreshCount=project!.blocks.filter(needsReview).length;

@@ -7,6 +7,7 @@ import { PreferredAttachments } from './preferred';
 import { readAsset } from './assets';
 import { resolveSettings } from './settings';
 import { applyAuthorMetadata } from './frontMatter';
+import { assertAttachment, assertProjectIdentity } from './paperIdentity';
 
 let meta: { id: string; version: string; rootURI: string };
 const menus = new Map<any, { nodes: any[]; popup: any; listener: any }>();
@@ -25,7 +26,7 @@ const realm = (base: string) => endpoint(base);
 const directory = () => PathUtils.join(Zotero.DataDirectory.dir, 'paperweave');
 const WORKBENCH_URL='chrome://paperweave/content/workbench.xhtml';
 const WORKBENCH_NAME='paperweave-workbench';
-interface WorkbenchRegistry { schema:1; windows:Set<any>; opening?:Promise<void> }
+interface WorkbenchRegistry { schema:1; windows:Set<any>; opening?:Promise<void>; latestRequest?:string }
 function workbenchRegistry():WorkbenchRegistry {
   try{
     const saved=Zotero.__paperWeaveWorkbenchRegistry;
@@ -41,7 +42,7 @@ function confirmedClosed(w:any):boolean {
   try{return w.closed===true;}catch{return false;}
 }
 function isWorkbench(w:any):boolean {
-  try{if(w.name===WORKBENCH_NAME)return true;}catch{}
+  try{if(w.name===WORKBENCH_NAME||w.name?.startsWith(WORKBENCH_NAME+'-'))return true;}catch{}
   try{if(w.document?.documentElement?.getAttribute('windowtype')==='paperweave:workbench')return true;}catch{}
   for(const read of [()=>w.location?.href,()=>w.document?.documentURI]){
     try{if(read()?.split(/[?#]/,1)[0]===WORKBENCH_URL)return true;}catch{}
@@ -79,7 +80,8 @@ export async function start(m: typeof meta) {
       button.title = 'PaperWeave：翻译 / 修订当前 PDF';
       button.setAttribute('aria-label', 'PaperWeave 翻译或修订当前 PDF');
       button.style.cssText = 'padding:0 8px;min-width:44px;font-size:12px;white-space:nowrap;';
-      button.addEventListener('click', () => void openWorkbench(Zotero.getMainWindow(), reader.itemID));
+      const itemID=reader.itemID;
+      button.addEventListener('click', () => void openWorkbench(Zotero.getMainWindow(), itemID));
       readerButtons.add(button); append(button);
     };
     Zotero.Reader.registerEventListener('renderToolbar', toolbarHandler, meta.id);
@@ -142,6 +144,8 @@ async function sourceOf(item: any) {
   if (!source) return item;
   const original = await Zotero.Items.getByLibraryAndKeyAsync(source.libraryID, source.key);
   if (!original || original.deleted) throw new Error('原始 PDF 附件已删除，无法继续修订。');
+  if(original.libraryID!==item.libraryID||original.parentID!==item.parentID||!original.isPDFAttachment?.())
+    throw new Error('生成附件与原论文的对应关系不一致，已停止打开。请直接选择原始 PDF。');
   return original;
 }
 export async function loadProject(item: any, progress: (s: string) => void, signal: AbortSignal) {
@@ -150,7 +154,9 @@ export async function loadProject(item: any, progress: (s: string) => void, sign
   const hash = await item.attachmentHash;
   const existing = await readJSON(projectPath(item, hash));
   if (existing) {
-    validateProject(existing); existing.pluginVersion = meta.version; existing.terminologyBatches ||= [];
+    validateProject(existing);
+    assertProjectIdentity(existing,{libraryID:item.libraryID,key:item.key,hash});
+    existing.pluginVersion = meta.version; existing.terminologyBatches ||= [];
     existing.source.title = item.parentItem?.getField('title') || item.getField('title') || existing.source.title;
     if (existing.extractionVersion !== EXTRACTION_VERSION && existing.extractionUpgradeAttempted !== EXTRACTION_VERSION) {
       progress('正在更新图表、公式与加粗结构并保留已有译文…');
@@ -163,11 +169,13 @@ export async function loadProject(item: any, progress: (s: string) => void, sign
     return existing;
   }
   const project = await extractProject(Zotero, item, meta.version, progress, signal);
+  assertProjectIdentity(project,{libraryID:item.libraryID,key:item.key,hash});
   await saveProject(project);
   return project;
 }
 export async function sourceBytes(item: any, project: Project) {
-  if (await item.attachmentHash !== project.source.hash) throw new Error('原 PDF 已变化，请关闭窗口并重新分析。');
+  const hash=await item.attachmentHash;
+  assertProjectIdentity(project,{libraryID:item.libraryID,key:item.key,hash});
   return IOUtils.read(await item.getFilePathAsync());
 }
 export async function fontBytes() {
@@ -260,63 +268,135 @@ export function acquire(item: any) {
   locks.add(id);
   return () => locks.delete(id);
 }
-async function chooseItem(window: any) {
-  const reader = Zotero.Reader.getByTabID(window.Zotero_Tabs?.selectedID);
-  if (reader?.itemID) return sourceOf(await Zotero.Items.getAsync(reader.itemID));
-  const selected = window.ZoteroPane.getSelectedItems();
-  if (selected.length !== 1) throw new Error('请只选择一个 PDF 附件或一篇论文。');
-  let item = selected[0];
-  if (!item.isPDFAttachment()) {
-    if (!item.isRegularItem()) throw new Error('请选择 PDF 附件。');
-    const ids = item.getAttachments();
-    const attachments = await Zotero.Items.getAsync(ids);
-    const pdfs = attachments.filter((a: any) => !a.deleted && a.isPDFAttachment());
-    if (!pdfs.length) throw new Error('这篇论文没有 PDF 附件。');
-    if (pdfs.length > 1) {
-      const best = await item.getBestAttachment();
-      const original = best && await sourceOf(best);
-      if (!original?.isPDFAttachment()) throw new Error('请展开论文条目并选择原始 PDF。');
-      item = original;
-    } else item = pdfs[0];
-  }
-  return sourceOf(item);
+type OpenContext='auto'|'selection';
+function titleOf(item:any):string {
+  return item.parentItem?.getField('title')||item.getField?.('title')||'当前论文';
 }
-function focusWorkbench():boolean {
-  for(const w of workbenchWindows()) {
-    // A live window still owns the slot if the host cannot restore or focus it.
-    try { if(typeof w.STATE_MINIMIZED==='number'&&w.windowState===w.STATE_MINIMIZED)w.restore?.(); } catch {}
-    try { w.focus(); } catch {}
-    return true;
-  }
-  return false;
+function createWorkbenchBridge(item:any,sessionID:string){
+  const binding=Object.freeze({id:item.id,libraryID:item.libraryID,key:item.key,parentID:item.parentID,title:titleOf(item),sessionID});
+  let loadedHash:string|undefined;
+  const checkItem=(requested:any)=>{assertAttachment(requested,binding);assertAttachment(item,binding);};
+  const checkProject=async(project:Project)=>{
+    validateProject(project);checkItem(item);
+    const hash=await item.attachmentHash;
+    checkItem(item);
+    assertProjectIdentity(project,{libraryID:binding.libraryID,key:binding.key,hash});
+    if(loadedHash&&project.source.hash!==loadedHash)throw new Error('原 PDF 已变化，请重新打开目标论文。');
+  };
+  return Object.freeze({item,binding,meta,settings,hasKey,apiKey,saveSettings,
+    loadProject:async(requested:any,progress:(s:string)=>void,signal:AbortSignal)=>{
+      checkItem(requested);const project=await loadProject(item,progress,signal);
+      await checkProject(project);loadedHash=project.source.hash;return project;
+    },
+    saveProject:async(project:Project)=>{await checkProject(project);await saveProject(project);},
+    sourceBytes:async(requested:any,project:Project)=>{checkItem(requested);await checkProject(project);return sourceBytes(item,project);},
+    attachPDF:async(requested:any,project:Project,bytes:Uint8Array,makePreferred:boolean)=>{
+      checkItem(requested);await checkProject(project);return attachPDF(item,project,bytes,makePreferred);
+    },
+    acquire:(requested:any)=>{checkItem(requested);return acquire(item);},
+    preferOriginal:async(requested:any)=>{checkItem(requested);return preferOriginal(item);},
+    exportProject:async(window:any,project:Project)=>{await checkProject(project);return exportProject(window,project);},
+    importProject:async(window:any,requested:any,project:Project)=>{
+      checkItem(requested);await checkProject(project);return importProject(window,item,project);
+    },
+    fontBytes,monoFontBytes,preferBilingual
+  });
 }
-export async function openWorkbench(window: any, itemID?: number) {
+/** Capture the entry-point target now, before any asynchronous window transition. */
+function captureOpenRequest(window:any,itemID:number|undefined,context:OpenContext):(()=>Promise<any>)|undefined {
+  let selected:any;
+  if(itemID===undefined&&context!=='selection')
+    itemID=Zotero.Reader?.getByTabID?.(window.Zotero_Tabs?.selectedID)?.itemID;
+  if(itemID===undefined){
+    const selection=window.ZoteroPane?.getSelectedItems?.()||[];
+    if(!selection.length&&context==='auto')return;
+    if(selection.length!==1)throw new Error('请只选择一个 PDF 附件或一篇论文。');
+    selected=selection[0];itemID=selected.id;
+  }
+  const capturedID=itemID,captured=selected?{id:selected.id,libraryID:selected.libraryID,key:selected.key,parentID:selected.parentID}:undefined;
+  return async()=>{
+    let item=await Zotero.Items.getAsync(capturedID);
+    if(captured)assertAttachment(item,captured);
+    if(!item||item.deleted)throw new Error('目标论文或 PDF 已不存在。');
+    if(!item.isPDFAttachment?.()){
+      if(!item.isRegularItem?.())throw new Error('请选择 PDF 附件或包含 PDF 的论文。');
+      const attachments=await Zotero.Items.getAsync(item.getAttachments());
+      const pdfs=attachments.filter((a:any)=>!a.deleted&&a.isPDFAttachment());
+      if(!pdfs.length)throw new Error('这篇论文没有 PDF 附件。');
+      if(pdfs.length===1)item=pdfs[0];
+      else {
+        const best=await item.getBestAttachment();
+        if(!best?.isPDFAttachment?.())throw new Error('请展开论文条目并选择原始 PDF。');
+        item=best;
+      }
+    }
+    return sourceOf(item);
+  };
+}
+function focusWindow(w:any){
+  try{if(typeof w.STATE_MINIMIZED==='number'&&w.windowState===w.STATE_MINIMIZED)w.restore?.();}catch{}
+  try{w.focus();}catch{}
+}
+function windowBinding(w:any):any {
+  try{return w.paperWeaveGetState?.()?.binding||w.arguments?.[0]?.binding;}catch{return undefined;}
+}
+function samePaper(binding:any,item:any){return binding?.libraryID===item.libraryID&&binding?.key===item.key;}
+async function waitClosed(w:any){
+  const deadline=Date.now()+1500;
+  while(!confirmedClosed(w)&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,25));
+  return confirmedClosed(w);
+}
+export async function openWorkbench(window:any,itemID?:number,context:OpenContext='auto'){
   if(!active||stopping)return;
-  if(focusWorkbench())return;
-  const shared=workbenchRegistry();
-  if(shared.opening){await shared.opening.catch(()=>{});focusWorkbench();return;}
-  const generation=lifecycle;
-  // Publish the process-wide guard before any asynchronous lookup or host reentry.
-  const opening=Promise.resolve().then(async()=>{
-    if(!active||stopping||generation!==lifecycle)return;
-    const item = itemID ? await sourceOf(await Zotero.Items.getAsync(itemID)) : await chooseItem(window);
-    if(!active||stopping||generation!==lifecycle||focusWorkbench())return;
-    const key = `${item.libraryID}:${item.key}`;
-    const bridge = { item, meta, settings, hasKey, apiKey, saveSettings, loadProject, saveProject,
-      sourceBytes, fontBytes, monoFontBytes, attachPDF, preferBilingual, preferOriginal, exportProject, importProject, acquire };
-    const w = window.openDialog(WORKBENCH_URL, WORKBENCH_NAME,
-      'chrome,resizable,centerscreen,width=1140,height=840', bridge);
+  let resolveItem:(()=>Promise<any>)|undefined;
+  try{resolveItem=captureOpenRequest(window,itemID,context);}
+  catch(error:any){Services.prompt.alert(window,'PaperWeave',error.message);return;}
+  if(!resolveItem){const current=workbenchWindows()[0];if(current)focusWindow(current);else Services.prompt.alert(window,'PaperWeave','请先选择一个 PDF 或打开论文阅读标签页。');return;}
+  const shared=workbenchRegistry(),generation=lifecycle;
+  const requestID=Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
+  shared.latestRequest=requestID;
+  const previous=shared.opening;
+  const current=()=>active&&!stopping&&generation===lifecycle&&shared.latestRequest===requestID;
+  const opening=(previous?previous.catch(()=>{}):Promise.resolve()).then(async()=>{
+    if(!current())return;
+    const item=await resolveItem!();
+    if(!current())return;
+    const existing=workbenchWindows(),matching=existing.find(w=>samePaper(windowBinding(w),item));
+    if(matching){focusWindow(matching);return;}
+    if(existing.length){
+      const w=existing[0];focusWindow(w);
+      if(existing.length>1)throw new Error('检测到多个旧工作台，请先保存并关闭多余窗口，再打开目标论文。');
+      if(typeof w.paperWeavePrepareSwitch!=='function')
+        throw new Error('当前工作台仍在载入或来自旧版本。请等待载入完成，或保存并关闭它后再打开目标论文。');
+      let prepared=false;
+      try{
+        prepared=await w.paperWeavePrepareSwitch({title:titleOf(item),libraryID:item.libraryID,key:item.key});
+        if(!prepared){
+          if(current()){
+            const state=w.paperWeaveGetState?.();
+            Services.prompt.alert(window,'PaperWeave',`《${state?.title||windowBinding(w)?.title||'当前论文'}》正在处理或保存，请等待完成或取消后再打开《${titleOf(item)}》。`);
+          }
+          return;
+        }
+        if(!current())return;
+        w.close();
+        if(!await waitClosed(w))throw new Error('当前工作台未关闭，已保留原论文；请保存并关闭后再打开目标论文。');
+      }finally{
+        if(prepared&&!confirmedClosed(w))try{w.paperWeaveCancelSwitch?.();}catch{}
+      }
+    }
+    if(!current())return;
+    const bridge=createWorkbenchBridge(item,requestID);
+    // A fresh native target prevents Gecko from recycling another document's arguments.
+    const w=window.openDialog(WORKBENCH_URL,WORKBENCH_NAME+'-'+requestID,
+      'chrome,resizable,centerscreen,width=1140,height=840',bridge);
     if(!w)throw new Error('无法打开 PaperWeave 工作台。');
-    windows.set(key, w);
-    shared.windows.add(w);
-    // about:blank and document navigation also emit top-level unload. Release
-    // the slot only after a confirmed window close, checked on the next action.
+    windows.set(`${item.libraryID}:${item.key}`,w);shared.windows.add(w);
   });
   workbenchOpening=opening;shared.opening=opening;
-  try {
-    await opening;
-  } catch (e: any) { Services.prompt.alert(window, 'PaperWeave', e.message); }
-  finally {
+  try{await opening;}
+  catch(error:any){if(current())Services.prompt.alert(window,'PaperWeave',error.message);}
+  finally{
     if(workbenchOpening===opening)workbenchOpening=undefined;
     if(shared.opening===opening)shared.opening=undefined;
   }
@@ -325,15 +405,15 @@ export function attach(window: any) {
   if (menus.has(window)) return;
   const d = window.document;
   const nodes: any[] = [];
-  const create = (parent: any, id: string) => {
+  const create = (parent: any, id: string, context:OpenContext='auto') => {
     if (!parent) return;
     const node = d.createXULElement('menuitem');
     node.id = id; node.setAttribute('label', 'PaperWeave · 逐段双语 PDF / 修订');
-    node.addEventListener('command', () => void openWorkbench(window));
+    node.addEventListener('command', () => void openWorkbench(window,undefined,context));
     parent.appendChild(node); nodes.push(node);
   };
   const popup = d.getElementById('zotero-itemmenu');
-  create(popup, 'paperweave-itemmenu');
+  create(popup, 'paperweave-itemmenu','selection');
   create(d.getElementById('menu_ToolsPopup'), 'paperweave-tools');
   // One shortcut works both in the library and in a PDF reader tab.
   const keyset = d.createXULElement('keyset');

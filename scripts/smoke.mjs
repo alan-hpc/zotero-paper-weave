@@ -28,6 +28,8 @@ try {
   await verifyCodexProxy();
   const {verifyWorkbenchWindows}=await import('./workbench-window-regression.mjs');
   await verifyWorkbenchWindows(moduleFor);
+  const {verifyPaperSessions}=await import('./paper-session-regression.mjs');
+  await verifyPaperSessions(moduleFor);
   const {PreferredAttachments}=await moduleFor('src/preferred.ts');
   const prefs=new Map();const parents=new Map();
   class Item {
@@ -110,11 +112,12 @@ try {
 
   const savedGlobals=new Map(['Zotero','IOUtils','PathUtils','Services'].map(key=>[key,globalThis[key]]));
   const opened=[],alerts=[],lookups=[];
-  let lookup=async id=>({id,libraryID:1,key:`PDF${id}`});
+  const windowItem=id=>({id,libraryID:1,key:`PDF${id}`,isPDFAttachment:()=>true,getField:()=>`Paper ${id}`});
+  let lookup=async id=>windowItem(id);
   const main={openDialog(_url,_name,_features,bridge){
     const listeners=new Map();
     const w={document:{},closed:false,STATE_MINIMIZED:2,windowState:0,focusCount:0,restoreCount:0,saveCount:0,
-      job:{running:true},bridge,addEventListener:(name,fn)=>listeners.set(name,fn),
+      job:{running:true},bridge,arguments:[bridge],paperWeaveGetState:()=>({binding:bridge.binding,title:'Running paper',busy:true}),paperWeavePrepareSwitch:async()=>false,addEventListener:(name,fn)=>listeners.set(name,fn),
       focus(){this.focusCount++;},restore(){this.restoreCount++;this.windowState=0;},
       async paperWeaveBeforeShutdown(){this.saveCount++;},
       close(){this.closed=true;listeners.get('unload')?.({target:this.document});},
@@ -130,46 +133,47 @@ try {
     const startWorkbench=()=>controllerStart({id:'single-window-test',version:'test',rootURI:'file:///addon/'});
     await startWorkbench();
     let resolveItem;
-    lookup=id=>new Promise(resolve=>{resolveItem=()=>resolve({id,libraryID:1,key:`PDF${id}`});});
-    const firstOpen=openWorkbench(main,1),concurrentOpen=openWorkbench(main,2);
-    await Promise.resolve();
+    lookup=id=>new Promise(resolve=>{resolveItem=()=>resolve(windowItem(id));});
+    const firstOpen=openWorkbench(main,1),concurrentOpen=openWorkbench(main,1);
+    await new Promise(resolve=>setTimeout(resolve,0));
     assert.deepEqual(lookups,[1],'concurrent requests share the first item lookup');
     resolveItem();await Promise.all([firstOpen,concurrentOpen]);
+    lookup=async id=>windowItem(id);
     assert.equal(opened.length,1,'concurrent clicks create one workbench');
     const first=opened[0],job=first.job;
     first.windowState=first.STATE_MINIMIZED;
     await openWorkbench(main,2);await openWorkbench(main);
-    assert.equal(opened.length,1);assert.equal(first.restoreCount,1);assert.ok(first.focusCount>=3);
+    assert.equal(opened.length,1);assert.equal(first.restoreCount,1);assert.ok(first.focusCount>=2);
     assert.equal(first.bridge.item.id,1,'another paper does not replace the current project');
     assert.equal(first.job,job);assert.equal(first.job.running,true,'existing task remains running');
     assert.equal(first.closed,false);
-    assert.deepEqual(lookups,[1],'existing window is focused even without a selected PDF');
+    assert.equal(lookups.at(-1),2,'an explicit target is resolved before an existing running project is retained');
     const normalFocus=first.focus;first.focus=()=>{throw new Error('host focus unavailable');};
     await openWorkbench(main,2);assert.equal(opened.length,1,'a live window retains the slot if focusing fails');
     first.focus=normalFocus;
     first.emitUnload({childDocument:true});await openWorkbench(main,2);
     assert.equal(opened.length,1,'child document unload does not release the singleton');
-    first.close();lookup=async id=>({id,libraryID:1,key:`PDF${id}`});
+    first.close();lookup=async id=>windowItem(id);
     await openWorkbench(main,2);assert.equal(opened.length,2);assert.equal(opened[1].bridge.item.id,2);
     opened[1].closed=true; // A host window can disappear without a usable unload event.
     await openWorkbench(main,3);assert.equal(opened.length,3);
     await controllerStop();assert.equal(opened[2].saveCount,1);assert.equal(opened[2].closed,true);
 
     await startWorkbench();
-    lookup=id=>new Promise(resolve=>{resolveItem=()=>resolve({id,libraryID:1,key:`PDF${id}`});});
+    lookup=id=>new Promise(resolve=>{resolveItem=()=>resolve(windowItem(id));});
     const lateOpen=openWorkbench(main,4);
-    await Promise.resolve();
+    await new Promise(resolve=>setTimeout(resolve,0));
     await controllerStop();await openWorkbench(main,5);
     await startWorkbench();
-    lookup=async id=>({id,libraryID:1,key:`PDF${id}`});
+    lookup=async id=>windowItem(id);
     await openWorkbench(main,6);
     resolveItem();await lateOpen;
     assert.equal(opened.length,4,'a late lookup from a stopped lifecycle cannot open a window');
     assert.equal(opened[3].bridge.item.id,6);
     opened[3].close();
     lookup=async()=>{throw new Error('mock missing PDF');};await openWorkbench(main,7);
-    assert.deepEqual(alerts,['mock missing PDF']);
-    lookup=async id=>({id,libraryID:1,key:`PDF${id}`});await openWorkbench(main,8);
+    assert.equal(alerts.at(-1),'mock missing PDF');
+    lookup=async id=>windowItem(id);await openWorkbench(main,8);
     assert.equal(opened.length,5,'failed opening releases the pending-opening guard');
     await controllerStop();
   }finally{
@@ -502,7 +506,7 @@ try {
   const uiDocument={readyState:'loading',createElement:uiElement,getElementsByTagName:()=>[],getElementById:id=>{queries++;return elements.get(id)||null;},body:{classList:{toggle(){}}}};
   let finishProject;
   let storedUISettings={baseURL:'https://api.deepseek.com/v1',model:'deepseek-flash',prompt:''};
-  const bridge={settings:()=>storedUISettings,saveSettings:async value=>{storedUISettings=value;},hasKey:()=>false,preferBilingual:()=>true,
+  const bridge={binding:{id:1,libraryID:1,key:'SOURCE01',title:'Synthetic startup check'},settings:()=>storedUISettings,saveSettings:async value=>{storedUISettings=value;},hasKey:()=>false,preferBilingual:()=>true,
     item:{getField:()=> 'Synthetic startup check'},acquire:()=>()=>{},loadProject:()=>new Promise(resolve=>{finishProject=resolve;})};
   const uiWindow={arguments:[bridge],addEventListener:(name,fn)=>events.set(name,fn)};
   const uiContext=vm.createContext({window:uiWindow,document:uiDocument,setTimeout,clearTimeout,setInterval,clearInterval,AbortController,TextEncoder,TextDecoder,URL,console});
@@ -513,10 +517,13 @@ try {
   assert.equal(elements.get('task-progress').attributes.get('data-busy'),'true');
   assert.equal(elements.get('progress-detail').textContent,'读取 PDF 项目');
   assert.match(elements.get('progress-time').textContent,/本次任务用时/);
-  const loadedProject={blocks:[],pages:[],terms:[],source:{}};
+  assert.equal(await uiWindow.paperWeavePrepareSwitch({title:'Linear Transformers'}),false,'loading/translation blocks a switch without aborting the current task');
+  assert.equal(elements.get('task-progress').attributes.get('data-busy'),'true');
+  const loadedProject={blocks:[],pages:[],terms:[],source:{libraryID:1,key:'SOURCE01',hash:'test',title:'Synthetic startup check'}};
   finishProject(loadedProject);await uiWindow.paperWeaveReady;
   assert.equal(elements.get('task-progress').attributes.get('data-busy'),'false');
   assert.equal(elements.get('paper-title').textContent,'Synthetic startup check');
+  assert.equal(uiDocument.title,'PaperWeave · Synthetic startup check');
   assert.equal(elements.get('deepseek-model').value,'deepseek-flash');
   assert.equal(elements.get('deepseek-enabled').checked,true);
   assert.equal(elements.get('codex-enabled').checked,false);
@@ -566,6 +573,16 @@ try {
   assert.equal(savedRevisions.at(-1).blocks[0].translation,'人工修订后的译文。');
   assert.equal(savedRevisions.at(-1).blocks[0].edited,true);
   assert.equal(cachedSourceReads,1,'Save revision persists text without generating an attachment');
+  assert.equal(await uiWindow.paperWeavePrepareSwitch({title:'Linear Transformers'}),true);
+  assert.equal(savedRevisions.at(-1).blocks[0].translation,'人工修订后的译文。','switch drains and saves the current revision');
+  assert.equal(elements.get('start').disabled,true);assert.equal(elements.get('translation').disabled,true);
+  elements.get('start').listeners.get('click')();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(cachedSourceReads,1,'a new task cannot start between saving and closing the old session');
+  uiWindow.paperWeaveCancelSwitch();assert.equal(elements.get('start').disabled,false);
+  const successfulSave=bridge.saveProject;bridge.saveProject=async()=>{throw new Error('mock save failure');};
+  await assert.rejects(uiWindow.paperWeavePrepareSwitch({title:'Linear Transformers'}),/mock save failure/);
+  assert.equal(elements.get('start').disabled,false,'a failed save unlocks and retains the current editor');
+  assert.equal(elements.get('translation').value,'人工修订后的译文。');bridge.saveProject=successfulSave;
   console.log('PASS simplified controls: cached generation without model settings and manual revision persistence');
 
   // A paragraph-local protocol rejection must not stall the remainder or generate an incomplete PDF.

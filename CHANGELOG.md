@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-alpha.38
+
+- Resolve the clicked library item independently of active reader tabs, and capture each open request before asynchronous work. Snapshot reader-toolbar item IDs when binding their buttons.
+- Switch an idle workbench by saving its revisions and opening a fresh, immutable document session. Keep running/loading tasks on their current paper and explain that the user must wait or cancel; save failure retains the editor. Later requests supersede pending switches without retargeting old callbacks.
+- Use unique native window targets under the process-wide singleton so Gecko cannot recycle another document's arguments. Display the bound paper title in both the workbench and native title bar.
+- Bind project load/save, PDF reads/imports, revisions and preferred-attachment actions to their original attachment. Validate library ID, attachment key, file hash and parent identity; reject mismatched caches before relabeling or writing and reject cross-paper output mappings.
+- Add ReplaySSM/Linear regressions for entry selection, save/switch, busy tasks, failed saves, late callbacks, equal-hash/different-attachment isolation, rapid requests, parent items and generated PDFs. Audit the reported local projects and output-parent mappings read-only; no cache cross-over was found in that sample.
+
 ## 0.1.0-alpha.37
 
 - Complete the workbench singleton fix with recovery when a previous add-on sandbox leaves an inaccessible shared registry. Recreate the guard and find the existing native window before any new item lookup/open.
