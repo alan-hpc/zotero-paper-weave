@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0-alpha.37
+
+- Complete the workbench singleton fix with recovery when a previous add-on sandbox leaves an inaccessible shared registry. Recreate the guard and find the existing native window before any new item lookup/open.
+- Add a regression for destroyed-sandbox registry access. Retain all alpha.36 singleton behavior and alpha.35 provider priorities.
+- Type checks, complete offline regressions and packaging pass. No real model calls or in-app installation acceptance were performed.
+
 ## 0.1.0-alpha.36
 
 - Keep the workbench singleton through initial document unloads and navigation. Release ownership only after the native window is confirmed closed or its wrapper is dead; a temporary WindowProxy access failure no longer permits another window.

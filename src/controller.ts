@@ -27,8 +27,10 @@ const WORKBENCH_URL='chrome://paperweave/content/workbench.xhtml';
 const WORKBENCH_NAME='paperweave-workbench';
 interface WorkbenchRegistry { schema:1; windows:Set<any>; opening?:Promise<void> }
 function workbenchRegistry():WorkbenchRegistry {
-  const saved=Zotero.__paperWeaveWorkbenchRegistry;
-  if(saved?.schema===1&&typeof saved.windows?.add==='function')return saved;
+  try{
+    const saved=Zotero.__paperWeaveWorkbenchRegistry;
+    if(saved?.schema===1&&typeof saved.windows?.add==='function')return saved;
+  }catch{} // The previous add-on sandbox may have been destroyed during an update.
   const created:WorkbenchRegistry={schema:1,windows:new Set()};
   Zotero.__paperWeaveWorkbenchRegistry=created;
   return created;

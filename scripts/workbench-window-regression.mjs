@@ -50,8 +50,9 @@ export async function verifyWorkbenchWindows(moduleFor){
 
     const orphan=dialog({item:{id:99}});
     nativeWindows.push({closed:false,location:{href:'https://example.test/'},document:{documentElement:{getAttribute:()=>''}}},orphan);
+    globalThis.Zotero.__paperWeaveWorkbenchRegistry=new Proxy({}, {get(){throw new Error('dead add-on sandbox');}});
     await a.openWorkbench(main(),3);
-    assert.equal(created.length,1,'discover a pre-existing workbench outside the local registry');
+    assert.equal(created.length,1,'recover a dead shared registry and discover the existing native workbench');
     assert.equal(orphan.focusCount,1);
     assert.equal(orphan.closed,false);
     await a.stop();
