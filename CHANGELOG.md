@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-alpha.39
+
+- Recover prose/math and numbered-reference boundaries from SDT font runs and glyph advances before text normalization; preserve source identities, explicit scripts, URL/code literals and layout hyphens. Avoid inferring mathematical styling from small-cap headings or graphic labels.
+- Give complete physical algorithm/graphic regions ownership of their interior blocks. Merge overlapping algorithm/table fragments across interrupted reading order, recover title/list-only algorithms and trailing steps, separate numbered tables/columns, and keep partial-page prose and manual classifications outside automatic suppression.
+- Recognize multiplication signs and ellipses as part of complete expressions. Typeset supported linear inline expressions locally as MathJax vectors instead of relying on shifted inline PDF crops; retain displayed formulas/algorithms as complete original regions. Unknown two-dimensional structure or correspondence falls back to the full source paragraph with a review notice.
+- Preserve all existing wording/manual edits on strict source-compatible migration. Flag retained glued-source artifacts, add a selective review-retranslation action that skips manual revisions, and replace each old automatic paragraph only after successful validation.
+- Pass type checks, complete offline regressions and real PDF generation. Check copies of 25 local projects (11051 blocks, 5051 translations): all saved wording/manual flags retained, zero duplicate source-page block ownership, 19 strict-compatible migrations and 6 protected non-migrations. Inspect ReplaySSM algorithms 1–6 and four locally revised paragraphs. No live model calls, original cache writes, native installation acceptance or community release for this version.
+
 ## 0.1.0-alpha.38
 
 - Resolve the clicked library item independently of active reader tabs, and capture each open request before asynchronous work. Snapshot reader-toolbar item IDs when binding their buttons.

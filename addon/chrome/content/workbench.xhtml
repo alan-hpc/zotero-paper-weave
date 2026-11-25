@@ -52,11 +52,11 @@
   </section>
   <p class="hint">排版 B · 原文左侧 60% / 中文右侧 40% · 正文两端对齐，段末左对齐 · 中间竖线</p>
   <p class="hint">作者、单位、邮箱与通讯作者说明仅保留在左侧原页，不参与正文翻译；已有译文缓存保留。需要翻译某个区域时，可手动改为正文。</p>
-  <p class="hint">图表、图注与表注整组保留原文，和公式一起插入右栏；空间不足时整组续页。修订后点击「保存修订」；需要更新 PDF 时点击「翻译并生成 PDF」，已有译文直接使用缓存。</p>
+  <p class="hint">算法、图表、图注与表注整组保留原文，每个区域仅输出一次；内部步骤不单独翻译。空间不足时整组续页。修订后点击「保存修订」，再点击「翻译并生成 PDF」更新阅读副本。</p>
   <p class="hint">字体：正文与英文术语使用思源宋体 · 行内代码使用更纱等宽字体</p>
   <p id="project-summary" class="hint">尚未载入翻译项目</p>
   <p id="math-summary" class="hint">数学表达正在识别…</p>
-  <details><summary>分步操作：词表与翻译</summary><div class="row"><button id="terms-action">识别本文术语</button><button id="translate">仅翻译未完成段落</button></div><p class="hint">也可以先复核词表再翻译。「翻译并生成 PDF」会自动识别术语、翻译剩余段落并导入附件；已有译文会保留。</p></details>
+  <details><summary>分步操作：词表与翻译</summary><div class="row"><button id="terms-action">识别本文术语</button><button id="translate">仅翻译未完成段落</button><button id="repair-review">重译需复核段落（保留人工修订）</button></div><p class="hint">已有译文默认保留。结构升级后，可重译需复核的自动译文；只有成功返回并通过校验后才覆盖该段，失败可继续。</p></details>
   <p class="notice">版面识别可能有误。请复核正文与图表分类；图表、图注、表格、公式、代码及参考文献默认保留原文。扫描件需先 OCR。</p>
   <main>
     <aside><div class="list-heading"><strong>段落</strong><select id="filter" aria-label="筛选段落"><option value="all">全部</option><option value="pending">未翻译</option><option value="editable">正文 / 标题</option><option value="math-review">公式 / 格式需复核</option><option value="keep">保留英文</option></select></div><div id="block-list"></div></aside>
@@ -64,7 +64,7 @@
       <div class="row"><strong id="block-title">请选择段落</strong><label class="inline">区域类型 <select id="kind"><option value="body">正文（翻译）</option><option value="heading">标题（翻译）</option><option value="figure">图（原文）</option><option value="caption">图注 / 表注（原文）</option><option value="table">表格（原文）</option><option value="math">公式（原文）</option><option value="code">代码（原文）</option><option value="reference">参考文献（原文）</option><option value="keep">其他（保留英文）</option></select></label></div>
       <label class="area">英文原文<textarea id="source" readonly="readonly" spellcheck="false"></textarea></label>
       <label class="area">中文译文（可以直接修改）<textarea id="translation" spellcheck="false" placeholder="生成译文后可在此修订；原文保留区域无需填写。"></textarea></label>
-      <p class="hint">原论文公式保留原始字形与二维结构。手工修订支持 LaTeX，例如 <code>\(R_1^T\)</code>、<code>\(\frac{x}{y}\)</code>；生成 PDF 时离线排版。</p>
+      <p class="hint">结构明确的行内数学用 LaTeX 离线排版；复杂结构不明时保留完整原文段落并提示复核。独立公式保留原貌。手工修订支持 <code>\(R_1^T\)</code>、<code>\(\frac{x}{y}\)</code>。</p>
       <div class="row"><button id="save-edit">保存修订</button><button id="retranslate">重新翻译本段（覆盖）</button><span id="edit-status"></span></div>
     </section>
   </main>

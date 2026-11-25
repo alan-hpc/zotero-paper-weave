@@ -5,6 +5,7 @@ import { formatDuration, requestProgressText } from './progress';
 import { mathReviewRequired } from './inlineMath';
 import { CODEX_DEFAULT, PROVIDERS, PROVIDER_LABELS, resolveSettings } from './settings';
 import { planProviders } from './routing';
+import { applyGraphicRegions } from './graphics';
 
 async function initialize() {
 const host = (window as any).arguments[0];
@@ -28,7 +29,7 @@ const TRANSLATION_CONCURRENCY = 3;
 let providerOrder:ProviderName[]=[...PROVIDERS];
 const priorityActions=PROVIDERS.flatMap(name=>[`${name}-up`,`${name}-down`]);
 const settingActions=[...priorityActions,'save-settings','use-codex-proxy','delete-key','delete-codex-key','delete-deepseek-key'];
-const actions = ['start','terms-action','translate','retranslate','import','export','save-edit','save-terms',...settingActions,'prefer-original'];
+const actions = ['start','terms-action','translate','repair-review','retranslate','import','export','save-edit','save-terms',...settingActions,'prefer-original'];
 const profileIDs={codex:{base:'codex-base',model:'codex-model',key:'codex-key',status:'codex-key-status'},
   deepseek:{base:'deepseek-base',model:'deepseek-model',key:'deepseek-key',status:'deepseek-key-status'},
   custom:{base:'base',model:'model',key:'key',status:'key-status'}};
@@ -127,7 +128,7 @@ async function provider(signal: AbortSignal) {
   }), settings };
 }
 const labels: Record<Kind,string> = { body:'正文', heading:'标题', figure:'图', caption:'图注 / 表注', table:'表格', math:'公式', code:'代码', reference:'参考文献', keep:'保留英文' };
-const needsReview=(block:Block)=>!(block.frontMatter&&block.kind==='keep')&&(!!block.translationNeedsRefresh||mathReviewRequired(block));
+const needsReview=(block:Block)=>!block.originalGraphic&&!(block.frontMatter&&block.kind==='keep')&&(!!block.translationNeedsRefresh||mathReviewRequired(block));
 function updateControls() {
   const locked=busy||switching;
   document.body.classList.toggle('busy', locked);
@@ -147,7 +148,7 @@ function list() {
   $('project-summary').textContent = `已翻译 ${translated}/${translatable.length} 段 · 保留原文 ${project.blocks.length-translatable.length} 个区域`;
   const inlineCount=project.blocks.reduce((n,b)=>n+(b.frontMatter&&b.kind==='keep'?0:b.mathSpans?.length||0),0),displayCount=project.blocks.filter(b=>b.kind==='math').length;
   const reviewCount=project.blocks.filter(needsReview).length;
-  $('math-summary').textContent=`数学表达：行内 ${inlineCount} 处、独立公式 ${displayCount} 处 · 原文保真 · ${reviewCount} 段公式或格式需复核`;
+  $('math-summary').textContent=`数学表达：行内 ${inlineCount} 处、独立公式 ${displayCount} 处 · 行内 LaTeX / 完整原文复核 · ${reviewCount} 段公式或格式需复核`;
   const filter = ($<HTMLSelectElement>('filter')).value;
   for (const b of project.blocks) {
     if ((filter === 'pending' && (!canTranslate(b) || !!b.translation.trim())) ||
@@ -157,7 +158,7 @@ function list() {
     button.classList.toggle('current', b.id === selected?.id);
     const meta = document.createElement('span'); meta.className = 'block-meta';
     const state=needsReview(b)?'格式需复核':b.edited?'已修订':b.translation?'已翻译':'待翻译';
-    meta.textContent = `${b.id} · p.${b.rects[0]?.[0]+1} · ${b.frontMatter&&b.kind==='keep'?'作者信息（仅左侧）':labels[b.kind]} · ${canTranslate(b) ? state : '原文'}`;
+    meta.textContent = `${b.id} · p.${b.rects[0]?.[0]+1} · ${b.originalGraphic?(b.originalGraphic.family==='algorithm'?'算法区域（整组保留）':'图表区域（整组保留）'):b.frontMatter&&b.kind==='keep'?'作者信息（仅左侧）':labels[b.kind]} · ${canTranslate(b) ? state : '原文'}`;
     const excerpt = document.createElement('span'); excerpt.textContent = b.source.slice(0,90) || '[PDF 图形区域]';
     button.append(meta, excerpt); button.addEventListener('click', () => select(b)); root.appendChild(button);
   }
@@ -168,7 +169,7 @@ function select(block: Block) {
   area('source').value = block.source;
   area('translation').value = block.translation;
   ($<HTMLSelectElement>('kind')).value = block.kind;
-  $('edit-status').textContent = block.frontMatter&&block.kind==='keep'?'作者信息仅保留在左侧原页，不参与翻译；已有译文缓存保留。':needsReview(block) ? '本段公式或格式需复核。无法确认公式对应时，PDF 保留原文；可用 LaTeX 修订，或重新翻译本段。' : block.edited ? '人工修订会保留' : '';
+  $('edit-status').textContent = block.originalGraphic?'本段已包含在完整原文区域中，不会重复翻译或输出；旧译文仍保留。可手动改为正文以单独翻译。':block.sourceRepairReason|| (block.frontMatter&&block.kind==='keep'?'作者信息仅保留在左侧原页，不参与翻译；已有译文缓存保留。':needsReview(block) ? '本段公式或格式需复核。无法确认公式对应时，PDF 保留原文；可用 LaTeX 修订，或重新翻译本段。' : block.edited ? '人工修订会保留' : '');
   list(); updateControls();
 }
 function refresh() {
@@ -259,12 +260,12 @@ bind('save-terms', async () => {
   project.terms = terms.map(source => ({ source, reason: '用户词表' }));
   project.terminologyReady = true; await save(); status(`已保存 ${terms.length} 个术语。`);
 });
-async function translateRemaining(client: Provider, settings: Settings, signal: AbortSignal) {
+async function translateRemaining(client: Provider, settings: Settings, signal: AbortSignal,reviewOnly=false) {
   if (!project!.terminologyReady) {
     await identifyTerms(client);
   }
-  const pending = project!.blocks.filter(b => canTranslate(b) && !b.translation.trim());
-  const total=project!.blocks.filter(canTranslate).length;
+  const pending = project!.blocks.filter(b => canTranslate(b) && (reviewOnly?needsReview(b)&&!b.edited:!b.translation.trim()));
+  const total=reviewOnly?pending.length:project!.blocks.filter(canTranslate).length;
   const initial=total-pending.length;
   phase('逐段翻译',initial,total,'段');
   const concurrency=Math.min(TRANSLATION_CONCURRENCY,pending.length);
@@ -315,6 +316,14 @@ bind('translate', () => run(async signal => {
   const { client, settings } = await provider(signal);
   await translateRemaining(client, settings, signal);
 }));
+bind('repair-review',()=>run(async signal=>{
+  if(!project!.blocks.some(b=>canTranslate(b)&&needsReview(b)&&!b.edited)){
+    status('没有需要自动重译的段落；人工修订请逐段复核。');return;
+  }
+  const {client,settings}=await provider(signal);
+  await translateRemaining(client,settings,signal,true);
+  status('需复核的自动译文已更新并保存；人工修订保持保留。可生成新 PDF。');
+}));
 bind('retranslate', () => run(async signal => {
   if (!selected || !canTranslate(selected)) return;
   const { client, settings } = await provider(signal);
@@ -359,9 +368,9 @@ $('translation').addEventListener('input', () => { if (selected) {
   const updated=area('translation').value;
   selected.translationBoldRanges=remapTextRanges(selected.translation,updated,selected.translationBoldRanges);
   selected.translationMathRefs=remapTextRanges(selected.translation,updated,selected.translationMathRefs);
-  selected.translation=updated;selected.edited=true;selected.translationNeedsRefresh=false;changed();
+  selected.translation=updated;selected.edited=true;selected.translationNeedsRefresh=false;delete selected.sourceRepairReason;changed();
 } });
-$('kind').addEventListener('change', () => { if (selected) { selected.kind = ($<HTMLSelectElement>('kind')).value as Kind; selected.kindEdited=true; changed(); list(); updateControls(); } });
+$('kind').addEventListener('change', () => { if (selected) { selected.kind = ($<HTMLSelectElement>('kind')).value as Kind; selected.kindEdited=true;applyGraphicRegions(project!); changed(); list(); updateControls(); } });
 for(const ids of Object.values(profileIDs)){
   input(ids.base).addEventListener('change',configurationView);
   input(ids.model).addEventListener('change',configurationView);

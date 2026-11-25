@@ -3,6 +3,8 @@ import { canonicalListSource } from './lists';
 import { scriptSource } from './inlineMath';
 import { recognizeMath } from './mathRecognition';
 import { applyAuthorMetadata } from './frontMatter';
+import { applyGraphicRegions } from './graphics';
+import { normalizeSourceNode, sourceBoundarySpace, referenceBoundaries } from './sourceText';
 
 type Node = {
   type?: string; text?: string; content?: Node[]; reference?: boolean;
@@ -18,15 +20,15 @@ function textPartsOf(n: Node, inheritedBold = false): TextPart[] {
   if (typeof n.text === 'string') return [{ text: scriptSource(n.text,n.style), bold,script:!!(n.style?.sub||n.style?.sup) }];
   const content = n.content || [], separator = content.some(c => c.type) ? '\n' : '';
   return content.flatMap((child,index) => {
-    const previous=content[index-1];
-    const labelSpace=!separator&&previous?.style?.bold&&/[.:]$/u.test(previous.text||'')&&
-      /^[A-Za-z]/u.test(child.text||'')?' ':separator;
+    const previous=content[index-1],childParts=textPartsOf(child,bold),leading=childParts.map(part=>part.text).join('');
+    const labelSpace=!separator&&(sourceBoundarySpace(previous,child)||previous?.style?.bold&&/[.:]$/u.test(previous.text||'')&&
+      /^[A-Za-z]/u.test(child.text||''))?' ':separator;
     let mathematicalHyphen=false;
     if(previous?.style?.sub||previous?.style?.sup)try {
       const runs=JSON.parse(child.anchor?.textMap||'[]');
-      mathematicalHyphen=!!(runs[0]?.[0]&1)&&/^[A-Za-z]/u.test(child.text||'');
+      mathematicalHyphen=!!(runs[0]?.[0]&1)&&/^[A-Za-z]/u.test(leading);
     }catch{}
-    return [...(mathematicalHyphen?[{text:'-',bold}]:index&&labelSpace?[{text:labelSpace,bold}]:[]),...textPartsOf(child,bold)];
+    return [...(mathematicalHyphen?[{text:'-',bold}]:index&&labelSpace?[{text:labelSpace,bold}]:[]),...childParts];
   });
 }
 function normalizeParts(parts: TextPart[]): { text: string; boldRanges: { start: number; end: number }[] } {
@@ -44,6 +46,12 @@ function normalizeParts(parts: TextPart[]): { text: string; boldRanges: { start:
     chars.push({ text: character, bold: part.bold });
     }
     if(part.text.trim())lastScript=!!part.script;
+  }
+  const plain=chars.map(char=>char.text).join(''),boundaries=new Set(referenceBoundaries(plain));
+  let rawOffset=0;
+  for(let i=0;i<chars.length;i++){
+    if(boundaries.has(rawOffset)){chars.splice(i,0,{text:' ',bold:chars[i].bold});i++;}
+    rawOffset+=chars[i].text.length;
   }
   const text = chars.map(char => char.text).join('');
   const boldRanges: { start: number; end: number }[] = [];
@@ -76,8 +84,8 @@ export async function extractProject(host: any, item: any, version: string,
   if (!String(structure.schemaVersion).startsWith('1.')) {
     throw new Error('Zotero 文档结构版本已变化；请更新 PaperWeave。');
   }
-  const roots: Node[] = structure.content;
-  if (!Array.isArray(roots)) throw new Error('Zotero 未返回有效的文档结构。');
+  if (!Array.isArray(structure.content)) throw new Error('Zotero 未返回有效的文档结构。');
+  const roots:Node[]=structure.content.map((node:Node)=>normalizeSourceNode(node));
   const entries: { node: Node; ref: number[]; inheritedKeep: boolean; list?:ListInfo }[] = [];
   const visit = (node: Node, ref: number[], keep: boolean, list?:ListInfo) => {
     keep ||= !!node.reference || ['auxiliary', 'excluded'].includes(node.flowClass || '');
@@ -169,5 +177,6 @@ export async function extractProject(host: any, item: any, version: string,
     pages, blocks, terms: [], terminologyReady: false, outputs: [], created: now(), updated: now()
   };
   applyAuthorMetadata(project);
+  applyGraphicRegions(project);
   return project;
 }

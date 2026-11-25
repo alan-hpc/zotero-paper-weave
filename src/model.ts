@@ -21,6 +21,9 @@ export interface Block {
   sourceType?: string;
   sourceFlowClass?: string;
   kindEdited?: boolean;
+  /** Derived physical ownership: interior text is emitted once in its complete original region. */
+  originalGraphic?: {anchorID:string;family:'figure'|'table'|'caption'|'algorithm'};
+  sourceRepairReason?: string;
   /** Author metadata remains on the intact source page and is omitted from translated prose. */
   frontMatter?: 'authors' | 'affiliation' | 'contact' | 'author-note';
   list?: ListInfo;
@@ -76,9 +79,9 @@ export interface ModelRouting {
 }
 /** Top-level endpoint fields remain compatible with projects using a single provider. No keys. */
 export interface Settings extends ModelEndpoint { prompt: string; routing?: ModelRouting }
-export const PROMPT_VERSION = '8';
-export const EXTRACTION_VERSION = 8;
-export const canTranslate = (b: Block) => b.kind === 'body' || b.kind === 'heading';
+export const PROMPT_VERSION = '9';
+export const EXTRACTION_VERSION = 9;
+export const canTranslate = (b: Block) => (b.kind === 'body' || b.kind === 'heading') && (!b.originalGraphic || !!b.kindEdited);
 export const now = () => new Date().toISOString();
 export function validateProject(p: unknown): asserts p is Project {
   const a = p as Project;
@@ -101,6 +104,9 @@ export function validateProject(p: unknown): asserts p is Project {
     }
     if(b.frontMatter!==undefined&&!['authors','affiliation','contact','author-note'].includes(b.frontMatter))
       throw new Error('翻译项目含无效的作者信息分类。');
+    if(b.originalGraphic&&(!ids.has(b.originalGraphic.anchorID)&&!a.blocks.some(x=>x.id===b.originalGraphic!.anchorID)||
+      !['figure','table','caption','algorithm'].includes(b.originalGraphic.family)))throw new Error('翻译项目含无效的图表区域绑定。');
+    if(b.sourceRepairReason!==undefined&&typeof b.sourceRepairReason!=='string')throw new Error('翻译项目含无效的原文修复说明。');
     if(b.list&&(typeof b.list.marker!=='string'||!b.list.marker||b.list.marker.length>24||
       !Number.isInteger(b.list.depth)||b.list.depth<0||b.list.depth>16||typeof b.list.ordered!=='boolean'))
       throw new Error('翻译项目含无效的列表结构。');

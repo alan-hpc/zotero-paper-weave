@@ -1,13 +1,14 @@
 import { PDFDocument, PDFEmbeddedPage, PDFFont, PDFPage, rgb, StandardFonts, pushGraphicsState, popGraphicsState, rectangle, clip, endPath } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import { Block, Project, ListInfo, canTranslate } from './model';
-import { StyledLine, OriginalMathMetrics, styledRuns, withFontFallback, wrapStyled, positionLine } from './typography';
+import { StyledLine, styledRuns, withFontFallback, wrapStyled, positionLine } from './typography';
 import { bounded } from './async';
 import { translatedBoldRanges } from './formatting';
 import { graphicGroups, GraphicGroup } from './graphics';
 import { listInfo, listText } from './lists';
 import { inlineMathText, mathReviewRequired } from './inlineMath';
 import { latexBox, drawLatex } from './latex';
+import { sourceMathLatex } from './mathPresentation';
 
 /** Design B: keep each complete source page on the left, with translation on the right. */
 export const LAYOUT = {
@@ -81,7 +82,9 @@ function pageCrop(page: PDFPage) {
 export async function render(project: Project, sourceBytes: Uint8Array, fontBytes: Uint8Array,
   appendix: boolean, signal: AbortSignal, progress: (s: string) => void,
   options: RenderOptions = {}): Promise<Uint8Array> {
-  const incomplete = project.blocks.filter(b => canTranslate(b) && !b.translation.trim());
+  const graphics=graphicGroups(project),byAnchor=new Map<string,GraphicGroup[]>();
+  const graphicMembers=new Set(graphics.flatMap(group=>group.blockIDs));
+  const incomplete = project.blocks.filter(b => canTranslate(b) && !graphicMembers.has(b.id) && !b.translation.trim());
   if (incomplete.length) throw new Error(`还有 ${incomplete.length} 段未翻译。请完成翻译，或将这些段落设为「保留英文」。`);
   signal.throwIfAborted();
   const source = await PDFDocument.load(sourceBytes);
@@ -93,8 +96,6 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
   const labelFont = await doc.embedFont(StandardFonts.Helvetica);
   const zhChars = new Set(zhFont.getCharacterSet()), monoChars = new Set(monoFont.getCharacterSet());
   const plansByPage: ContentPlan[][] = project.pages.map(()=>[]);
-  interface MathPart {image:PDFEmbeddedPage;width:number;height:number;offsetX:number;offsetY:number;pageWidth:number;pageHeight:number;targetX:number;targetTop:number}
-  const mathAssets=new Map<string,{parts:MathPart[];metrics:OriginalMathMetrics}>();
   const embeddedByPage=new Map<number,PDFEmbeddedPage>();
   let embeddedSource:Promise<PDFEmbeddedPage[]>|undefined;
   const embeddedPage=async(index:number)=>{
@@ -104,8 +105,6 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
     if(!(embedded.width>0&&embedded.height>0))throw new Error(`${label} 的版面尺寸无效。`);
     embeddedByPage.set(index,embedded);return embedded;
   };
-  const graphics=graphicGroups(project),byAnchor=new Map<string,GraphicGroup[]>();
-  const graphicMembers=new Set(graphics.flatMap(group=>group.blockIDs));
   for(const group of graphics)byAnchor.set(group.anchorID,[...(byAnchor.get(group.anchorID)||[]),group]);
 
   for (const block of project.blocks) {
@@ -123,7 +122,7 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
       plansByPage[pageIndex].push({kind:'graphic',block,blockIDs:group.blockIDs,groupLabel:group.label,
         image,width:imageWidth*scale,height:imageHeight*scale,sourceBox:box});
     }
-    if(graphicMembers.has(block.id))continue;
+    if(graphicMembers.has(block.id)&&!block.kindEdited)continue;
     const sourcePage=block.rects[0]?.[0];
     if ((!canTranslate(block) && block.kind!=='math') || block.rects.length===0) continue;
     if (!Number.isInteger(sourcePage) || sourcePage! < 0 || sourcePage! >= plansByPage.length) {
@@ -167,17 +166,25 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
       continue;
     }
     const heading=block.kind==='heading', size=heading?11.2:10.7;
-    const list=listInfo(block),originals=new Map<string,OriginalMathMetrics>();
+    const list=listInfo(block);
     const markerWidth=list?(list.ordered?Math.max(14,zhFont.widthOfTextAtSize(list.marker,size)+6):14):0;
     const textInset=(heading?0:21)+(list?Math.min(list.depth,8)*14:0)+markerWidth;
-    const rewritten=inlineMathText(block,block.translation,translatedBoldRanges(block),(_span,index)=>`\uE000PWMS${index}\uE001`);
+    const automaticLatex=new Map<number,string>();
+    for(const [index,span]of (block.mathSpans||[]).entries()){
+      const tex=sourceMathLatex(block.source.slice(span.start,span.end),span);if(!tex)continue;
+      try{latexBox(tex);automaticLatex.set(index,tex);}catch{/* Preserve the whole source paragraph when conversion cannot be verified. */}
+    }
+    const rewritten=inlineMathText(block,block.translation,translatedBoldRanges(block),(_span,index)=>
+      automaticLatex.has(index)?`\\(${automaticLatex.get(index)}\\)`:`\uE000PWMS${index}\uE001`);
     const matched=(rewritten.matchedMath||[]).filter(index=>!rewritten.retainedMath?.includes(index));
+    const uncertainInline=matched.some(index=>!automaticLatex.has(index));
     const oversized=matched.some(index=>{
       const span=block.mathSpans![index];
       const widths=span.rects.map(r=>(r[3]-r[1])/span.fontSize);
       return (span.flow==='wrapped'?widths.reduce((a,b)=>a+b,0):Math.max(...widths,0))*size>(ZW-textInset)*2;
     });
-    if(mathReviewRequired(block,rewritten)||oversized){
+    const sourceReview=!!block.sourceRepairReason&&!!block.translationNeedsRefresh;
+    if(mathReviewRequired(block,rewritten)||oversized||sourceReview||uncertainInline){
       // An old draft with no provable formula correspondence must not print flattened math.
       // Preserve its original paragraph and retain the editable Chinese in the project.
       const pages=new Map<number,{left:number;bottom:number;right:number;top:number}>();
@@ -190,36 +197,12 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
         const image=await embeddedPage(pageIndex),imageWidth=box.right-box.left,imageHeight=box.top-box.bottom;
         const scale=Math.min((ZW-24)/imageWidth,(TEXT_HEIGHT-20-GAP*2)/imageHeight,1);
         plansByPage[pageIndex].push({kind:'formula',block,blockIDs:[block.id],image,width:imageWidth*scale,height:imageHeight*scale+20,
-          imageHeight:imageHeight*scale,sourceBox:box,notice:`${block.id} ${oversized?'公式过宽':'数学对应'}需复核：本段保留原文，译文仍保存在项目中。`});
+          imageHeight:imageHeight*scale,sourceBox:box,notice:`${block.id} ${sourceReview?'原文边界已修复，旧译文':uncertainInline?'行内公式结构':oversized?'公式过宽':'数学对应'}需复核：本段保留原文，译文仍保存在项目中。`});
       }
       continue;
     }
-    for(const index of matched){
-      const span=block.mathSpans![index],key=`${block.id}/${index}`,parts:MathPart[]=[];
-      const sourceSize=span.fontSize;let totalHeight=0,width=0;
-      for(const [partIndex,rect] of span.rects.entries()){
-        const pageIndex=rect[0];if(pageIndex<0||pageIndex>=source.getPageCount())throw new Error(`${block.id} 的行内公式页码无效。`);
-        const crop=source.getPage(pageIndex).getCropBox(),pad=0;
-        const box={left:Math.max(crop.x,rect[1]-pad),bottom:Math.max(crop.y,rect[2]-pad),right:Math.min(crop.x+crop.width,rect[3]+pad),top:Math.min(crop.y+crop.height,rect[4]+pad)};
-        const image=await embeddedPage(pageIndex);
-        const w=(box.right-box.left)/sourceSize,h=(box.top-box.bottom)/sourceSize;
-        parts.push({image,width:w,height:h,offsetX:(box.left-crop.x)/sourceSize,offsetY:(box.bottom-crop.y)/sourceSize,
-          pageWidth:image.width/sourceSize,pageHeight:image.height/sourceSize,
-          targetX:span.flow==='wrapped'?width:0,targetTop:span.flow==='wrapped'?(box.top-span.baselines[partIndex])/sourceSize:-totalHeight});
-        width=span.flow==='wrapped'?width+w:Math.max(width,w);totalHeight+=h;
-      }
-      if(!parts.length)throw new Error(`${block.id} 的公式原文坐标缺失，请修订为 LaTeX 后保存。`);
-      totalHeight+=Math.max(0,parts.length-1)*.2;
-      const first=span.rects[0],single=parts.length===1;
-      const ascent=span.flow==='wrapped'?Math.max(...parts.map(p=>p.targetTop)):
-        Math.max(0,Math.min(totalHeight,single?(first[4]-span.baselines[0])/sourceSize:totalHeight*.75));
-      const descent=span.flow==='wrapped'?Math.max(...parts.map(p=>p.height-p.targetTop)):totalHeight-ascent;
-      if(span.flow!=='wrapped')for(const [i,part] of parts.entries())part.targetTop+=ascent-i*.2;
-      const metrics={key,width,ascent,descent,index,wrapped:span.flow==='wrapped'};
-      mathAssets.set(key,{parts,metrics});originals.set(`\uE000PWMS${index}\uE001`,metrics);
-    }
     const content=listText(block,rewritten.text,rewritten.ranges);
-    const runs=withFontFallback(styledRuns(content.text,content.ranges,originals),zhChars,monoChars);
+    const runs=withFontFallback(styledRuns(content.text,content.ranges),zhChars,monoChars);
     const absent=[...new Set(runs.flatMap(run=>run.math||run.originalMath?[]:[...run.text].filter(c=>!/[^\S\r\n]/.test(c)&&!(run.mono?monoChars:zhChars).has(c.codePointAt(0)!))))];
     if(absent.length)throw new Error(`${block.id} 含字体不支持的字符：${absent.slice(0,12).join(' ')}。请修订后重排。`);
     const lines=wrapStyled(runs,zhFont,monoFont,size,ZW-textInset).map(line=>{
@@ -332,15 +315,7 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
           const font=run.mono?monoFont:zhFont;
           if(run.text) {
             const drawOptions={x:x+run.x,y:cursor-line.ascent!,font,size:plan.size,color:heading?ink:blue};
-            if(run.originalMath){
-              const asset=mathAssets.get(run.originalMath.key)!;const mathSize=plan.size*(run.mathScale||1);
-              for(const part of asset.parts){
-                const bottom=drawOptions.y+(part.targetTop-part.height)*mathSize,left=drawOptions.x+part.targetX*mathSize;
-                page.pushOperators(pushGraphicsState(),rectangle(left,bottom,part.width*mathSize,part.height*mathSize),clip(),endPath());
-                page.drawPage(part.image,{x:left-part.offsetX*mathSize,y:bottom-part.offsetY*mathSize,width:part.pageWidth*mathSize,height:part.pageHeight*mathSize});
-                page.pushOperators(popGraphicsState());
-              }
-            }else if(run.math){
+            if(run.math){
               drawLatex(page,run.math,drawOptions.x,drawOptions.y,plan.size*(run.mathScale||1),drawOptions.color);
               if(run.bold)drawLatex(page,run.math,drawOptions.x+.15,drawOptions.y,plan.size*(run.mathScale||1),drawOptions.color);
             }

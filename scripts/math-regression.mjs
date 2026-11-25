@@ -7,6 +7,13 @@ export async function verifyMathPipeline(moduleFor){
   const {styledRuns,wrapStyled,positionLine,runWidth}=await moduleFor('src/typography.ts');
   const {validateProject}=await moduleFor('src/model.ts');
   const {recognizeMath}=await moduleFor('src/mathRecognition.ts');
+  const {sourceMathLatex}=await moduleFor('src/mathPresentation.ts');
+  const {latexBox}=await moduleFor('src/latex.ts');
+  for(const expression of ['j≤h','h < j < t','T×T','A_{js}=γ_{h+j+1:h+s}k^{⊤}_{h+j}k_{h+s}','B_{d}=diag(β_{h+1}, . . . , β_{h+T})']){
+    const tex=sourceMathLatex(expression,{features:['scripts']});assert.ok(tex,expression);assert.ok(latexBox(tex).shapes.length);
+  }
+  assert.equal(sourceMathLatex('withj≤huse',{features:[]}),undefined,'prose glued to an expression must not become a math label');
+  assert.equal(sourceMathLatex('a b c d',{features:['stacked-layout']}),undefined,'unknown matrix/fraction geometry must not be guessed');
   const context='A detailed scientific paragraph establishes the variables and explains the result: ';
   const leaf=(text,x,y,style={},size=10)=>({text,style,anchor:{textMap:JSON.stringify([[0,0,x,y,x+[...text].filter(c=>! /\s/u.test(c)).length*size*.5,y+size*.86,...[...text].filter(c=>! /\s/u.test(c)).map(()=>size*.5)]])}});
   const scenarios=[
@@ -58,6 +65,10 @@ export async function verifyMathPipeline(moduleFor){
   assert.deepEqual(recognizeMath('Contributors^{1}',[leaf('Contributors',40,650),leaf('1',130,655,{sup:true},7)]),[]);
   const proseURL='See abs/2107.03374, 2021 at https://arxiv.org/abs/2107.03374.';
   assert.deepEqual(recognizeMath(proseURL,[leaf(proseURL,40,650)]),[],'URLs and arXiv reference identifiers are not ratios');
+  const touching='one T×T triangular solve';
+  const touchingSpan=recognizeMath(touching,[leaf('one',100.0000000000001,650),leaf('T×T',115,650),leaf(' triangular solve',129.9,650)])[0];
+  assert.equal(touching.slice(touchingSpan.start,touchingSpan.end),'T×T');
+  assert.ok(touchingSpan.rects[0][1]>=115-.01&&touchingSpan.rects[0][3]<=130+.01,'floating advances and touching prose cannot bleed into a math crop');
   const clause='r=4, GPU improves throughput.';
   assert.deepEqual(recognizeMath(clause,[leaf(clause,40,650)]).map(s=>clause.slice(s.start,s.end)),['r=4'],'a prose comma ends a mathematical object');
   const glued='Each block holdsn _{r} branches.';

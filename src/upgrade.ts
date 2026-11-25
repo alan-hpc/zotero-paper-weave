@@ -3,9 +3,15 @@ import { translatedBoldRanges } from './formatting';
 import { withoutListMarkers } from './lists';
 import { inlineIdentity, SCRIPT_EXPRESSION, rebaseMathRefs, mathReviewRequired } from './inlineMath';
 import { applyAuthorMetadata } from './frontMatter';
+import { applyGraphicRegions } from './graphics';
 
 export const sourceIdentity=(text:string)=>inlineIdentity(withoutListMarkers(text).text);
 const protectedKinds=new Set(['math','figure','table','caption','code']);
+function retainedSourceArtifact(old:Block,fresh:Block):boolean {
+  return [...old.source.matchAll(/[A-Za-z][^\s,;:()]*/gu)].some(m=>m[0].length>=5&&
+    !/^(?:Equation|Algorithm|Section|Figure|Table)\d+(?:\.\d+)*$/u.test(m[0])&&
+    old.translation.includes(m[0])&&!fresh.source.includes(m[0]));
+}
 
 /** Apply refreshed layout metadata only when every saved source paragraph still matches. */
 export function reconcileExtraction(existing:Project,refreshed:Project):boolean {
@@ -33,10 +39,17 @@ export function reconcileExtraction(existing:Project,refreshed:Project):boolean 
     if(block.translation.trim()&&!block.edited&&(block.mathSpans?.some(s=>s.representation==='review')||!block.mathSpans?.length&&unresolvedScripts)&&Number(old.translatedWith?.promptVersion||0)<7)
       block.translationNeedsRefresh=true;
     if(mathReviewRequired(block))block.translationNeedsRefresh=true;
+    const boundaryRepair=old.source!==fresh.source&&sourceIdentity(old.source)===sourceIdentity(fresh.source)&&
+      (existing.extractionVersion||0)<9&&retainedSourceArtifact(old,fresh);
+    if(boundaryRepair&&old.translation.trim()){
+      block.sourceRepairReason='已依据原 PDF 字形恢复正文、变量和引用边界；旧译文需复核。';
+      block.translationNeedsRefresh=true;
+    }else block.sourceRepairReason=old.sourceRepairReason;
     return block;
   });
   existing.blocks=blocks;existing.pages=refreshed.pages;
   existing.extractionVersion=EXTRACTION_VERSION;existing.extractionUpgradeAttempted=EXTRACTION_VERSION;
   applyAuthorMetadata(existing);
+  applyGraphicRegions(existing);
   return true;
 }

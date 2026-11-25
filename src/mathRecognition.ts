@@ -70,7 +70,7 @@ function sourceGeometry(source:string,nodes:MathNode[]) {
 const SCRIPT=String.raw`[_^]\{(?:\\[{}]|[^{}])*\}`;
 const UNICODE_SCRIPT=String.raw`[\u00B2\u00B3\u00B9\u02B0-\u02FF\u2070-\u209F\u1D2C-\u1D6A]+`;
 const WORD=String.raw`(?<![A-Za-z0-9_])(?:[A-Z][A-Za-z0-9_]{1,23}(?=\()|[A-Z]{1,8}|d[A-Za-z\u0370-\u03FF]|[a-z]|max|min|log|ln|sin|cos|tan|exp|det|arg|softmax|sigmoid|relu|diag|rank|trace|mean|std|abs|sign|clip|round|floor|ceil)(?![A-Za-z0-9_])`;
-const TOKENS=new RegExp(SCRIPT_EXPRESSION.source+'|'+SCRIPT+'|'+UNICODE_SCRIPT+'|'+WORD+String.raw`|\d+(?:\.\d+)?(?:[eE][-+−]?\d+)?|[\u0370-\u03FF\u2100-\u22FF\u27C0-\u27EF\u2980-\u29FF\u{1D400}-\u{1D7FF}∆]|:=|[-=<>+*/|,]|[()\[\]{}]|[ˆ\u0300-\u036F′″]|\s+`,'gu');
+const TOKENS=new RegExp(SCRIPT_EXPRESSION.source+'|'+SCRIPT+'|'+UNICODE_SCRIPT+'|'+WORD+String.raw`|\d+(?:\.\d+)?(?:[eE][-+−]?\d+)?|(?:\.\s*){2,}|…|[\u0370-\u03FF\u2100-\u22FF\u27C0-\u27EF\u2980-\u29FF\u{1D400}-\u{1D7FF}∆]|:=|[-=<>+*/|,×÷]|[()\[\]{}]|[ˆ\u0300-\u036F′″]|\s+`,'gu');
 const operand=(s:string)=>/[\p{L}\p{N}∆∇∑∏√∫∂∞ℒ]/u.test(s);
 const scriptless=(s:string)=>s.replace(new RegExp(SCRIPT,'gu'),'');
 const opening=/^[([{]$/u,closing=/^[)\]}]$/u;
@@ -135,13 +135,14 @@ function mathRegions(glyphs:Glyph[],fontSize:number,paragraphWidth:number):Rect[
 }
 function cropFrame(row:Rect,outside:Glyph[]):Rect {
   let left=row[1]-1.5,right=row[3]+1.5,bottom=row[2]-1,top=row[4]+1;
+  const epsilon=Math.min(.5,(row[4]-row[2])*.06);
   for(const {rect:r}of outside){
     if(r[0]!==row[0])continue;
     const horizontal=Math.min(r[3],row[3])-Math.max(r[1],row[1]);
     const vertical=Math.min(r[4],row[4])-Math.max(r[2],row[2]);
     if(vertical>0){
-      if(r[3]<=row[1])left=Math.max(left,(r[3]+row[1])/2);
-      if(r[1]>=row[3])right=Math.min(right,(r[1]+row[3])/2);
+      if(r[3]<=row[1]+epsilon&&(r[1]+r[3])/2<row[1])left=Math.max(left,Math.min(row[1]+.01,(r[3]+row[1])/2));
+      if(r[1]>=row[3]-epsilon&&(r[1]+r[3])/2>row[3])right=Math.min(right,Math.max(row[3]-.01,(r[1]+row[3])/2));
     }
     if(horizontal>0){
       if(r[4]<=row[2])bottom=Math.max(bottom,(r[4]+row[2])/2);

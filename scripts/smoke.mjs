@@ -16,6 +16,8 @@ async function moduleFor(file,suffix='') {
 try {
   const {verifyMathPipeline}=await import('./math-regression.mjs');
   await verifyMathPipeline(moduleFor);
+  const {verifyDocumentStructure}=await import('./document-structure-regression.mjs');
+  await verifyDocumentStructure(moduleFor);
   const {verifyProtection}=await import('./protection-regression.mjs');
   await verifyProtection(moduleFor);
   const {verifyNetwork}=await import('./network-regression.mjs');
@@ -617,6 +619,23 @@ try {
   assert.match(elements.get('status').textContent,/HTTP 401/);assert.equal(cachedSourceReads,2);
   console.log('PASS paragraph failure isolation: continue/save other work, no incomplete PDF, report IDs and resume only pending paragraphs');
 
+  loadedProject.blocks[0].translationNeedsRefresh=true;
+  loadedProject.blocks[1].translationNeedsRefresh=true;loadedProject.blocks[1].sourceRepairReason='synthetic boundary repair';
+  const oldReview=loadedProject.blocks[1].translation;
+  elements.get('repair-review').listeners.get('click')();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(loadedProject.blocks[1].translation,oldReview,'failed review retranslation keeps the previous wording');
+  let reviewCalls=0;uiContext.fetch=async(_url,options)=>{
+    reviewCalls++;const payload=JSON.parse(JSON.parse(options.body).messages[1].content);
+    return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({translation:'修复后的译文 '+payload.paragraph})}}]})};
+  };
+  elements.get('repair-review').listeners.get('click')();await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(reviewCalls,1,'review retranslation skips edited blocks and unrelated pending paragraphs');
+  assert.ok(loadedProject.blocks[1].translation.startsWith('修复后的译文'));
+  assert.equal(loadedProject.blocks[1].sourceRepairReason,undefined);assert.equal(loadedProject.blocks[1].translationNeedsRefresh,false);
+  assert.equal(loadedProject.blocks[0].translation,'人工修订后的译文。');assert.equal(loadedProject.blocks[0].edited,true);
+  assert.ok(loadedProject.blocks.slice(5).every(b=>!b.translation));assert.equal(cachedSourceReads,2);
+  console.log('PASS selective repair: successful replacement only, failure retention, manual-edit protection and unrelated pending blocks');
+
   const {render,LAYOUT}=await moduleFor('src/render.ts');
   const doc=await PDFDocument.create();const page=doc.addPage([612,792]);
   const font=await doc.embedFont(StandardFonts.TimesRoman);
@@ -687,12 +706,12 @@ try {
   const formula=placements.find(p=>p.kind==='formula');
   assert.equal(formula.blockID,'b5');assert.ok(formula.sourceBox.right>=550,'crop includes the equation number at the column edge');
   assert.ok(placements.findIndex(p=>p.kind==='formula')<placements.findIndex(p=>p.blockID==='b6'),'formula retains reading order');
-  assert.deepEqual(placements.find(p=>p.blockID==='b8').inlineMathSources,[0],'matched PDF math uses source vectors');
+  assert.deepEqual(placements.find(p=>p.blockID==='b8').mathExpressions,['R_{1}'],'explicit linear math is typeset as vectors without an inline PDF crop');
   assert.equal(placements.find(p=>p.blockID==='b9').mathReview,true,'even an edited paragraph cannot silently print an unmatched formula');
   const manualMath=placements.find(p=>p.blockID==='b10');
   assert.ok(!manualMath.mathReview);assert.deepEqual(manualMath.mathExpressions,['R_1'],'explicit authored LaTeX overrides a source formula');
   assert.equal(placements.find(p=>p.blockID==='b11').mathReview,true,'oversized source math falls back safely instead of aborting the entire PDF');
-  assert.deepEqual(placements.find(p=>p.blockID==='b12').inlineMathWrapped,[0],'wrapped native regions rejoin rather than imitate a fraction');
+  assert.deepEqual(placements.find(p=>p.blockID==='b12').mathExpressions,['R_{1}'],'source line wraps cannot imitate a fraction in linear mathematical typesetting');
   const divider=LAYOUT.margin+(LAYOUT.width-2*LAYOUT.margin)*.6;
   assert.equal((divider-LAYOUT.margin)/(LAYOUT.width-2*LAYOUT.margin),.6);
   for (const line of wrapStyled(styledRuns('AReallyLongTechnicalIdentifier'.repeat(8)),font,font,11,200))

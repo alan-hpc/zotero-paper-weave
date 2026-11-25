@@ -7,6 +7,7 @@ import { PreferredAttachments } from './preferred';
 import { readAsset } from './assets';
 import { resolveSettings } from './settings';
 import { applyAuthorMetadata } from './frontMatter';
+import { applyGraphicRegions } from './graphics';
 import { assertAttachment, assertProjectIdentity } from './paperIdentity';
 
 let meta: { id: string; version: string; rootURI: string };
@@ -165,7 +166,8 @@ export async function loadProject(item: any, progress: (s: string) => void, sign
       reconcileExtraction(existing,refreshed);
       await saveProject(existing);
     }
-    if(applyAuthorMetadata(existing).changed)await saveProject(existing);
+    const authorsChanged=applyAuthorMetadata(existing).changed;
+    if(applyGraphicRegions(existing).changed||authorsChanged)await saveProject(existing);
     return existing;
   }
   const project = await extractProject(Zotero, item, meta.version, progress, signal);
@@ -250,7 +252,8 @@ export async function importProject(window: any, item: any, current: Project) {
   }
   for (const block of current.blocks) {
     const edit = records.get(block.id)!;
-    block.translation = edit.translation; block.kind = edit.kind;
+    block.translation = edit.translation;
+    block.kindEdited=edit.kindEdited||block.kindEdited||block.kind!==edit.kind;block.kind = edit.kind;
     block.translationBoldRanges = edit.translationBoldRanges;
     block.translationMathRefs=rebaseMathRefs(edit,block);
     block.edited = true; block.translatedWith = edit.translatedWith;
@@ -259,6 +262,7 @@ export async function importProject(window: any, item: any, current: Project) {
   current.terminologyReady = incoming.terminologyReady;
   current.terminologyBatches = incoming.terminologyBatches || [];
   applyAuthorMetadata(current);
+  applyGraphicRegions(current);
   await saveProject(current);
   return current;
 }
