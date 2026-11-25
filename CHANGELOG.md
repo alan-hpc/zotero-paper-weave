@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-alpha.42
+
+- Fix Gecko's “Accessing TypedArray data over Xrays” error by cloning binary data into the consuming realm before inspecting it. Apply the same boundary to screenshot ArrayBuffers, PNG cache reads/writes, source PDFs, packaged fonts, workbench transfers and PDF attachment writes.
+- Preserve sliced-view offsets and independent buffers. Keep existing Xray waivers limited to the PDF.js object API, and use structured cloning for binary ownership. Reject failed font copies instead of leaving their promises pending.
+- Report screenshot-cache read and write failures at their actual stage. Preserve original documents, saved translations, API configuration and optional-image routing.
+- Add rejecting binary-wrapper fixtures, real JavaScript VM context checks, screenshot/cached-PNG paths, native-write boundaries and a real PDF generated through the workbench with wrapped PDF/font inputs. Native Zotero installation and real DeepSeek requests remain unverified for this version.
+
 ## 0.1.0-alpha.41
 
 - Fix false mathematical regions inside PDF-spaced URLs such as `https: //…/r/PDEVIS-3EDD/README.md`, and retain the multiplication suffix in numeric speedups such as `1.65×`. Refresh strictly compatible cached math metadata without changing saved translations or manual edits.

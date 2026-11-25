@@ -1,5 +1,13 @@
 # Architecture
 
+Binary values crossing Gecko compartments are cloned into the consuming global
+before inspection. `bytes.ts` preserves typed-view offsets and returns an owned
+copy; Xray waivers are reserved for the PDF.js object interface. The controller
+clones storage inputs locally, clones PNG/PDF outputs into the IOUtils global,
+and exposes a structured-clone bridge for source PDFs and fonts consumed by the
+workbench. Screenshot Blob ArrayBuffers and packaged-font responses follow the
+same rule. Strings and paragraph metadata do not require this binary bridge.
+
 ## Pipeline
 
 ```mermaid

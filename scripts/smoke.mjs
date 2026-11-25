@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import {binaryBoundaryFixture} from './binary-fixture.mjs';
 
 const temporary=await mkdtemp(join(tmpdir(),'paperweave-smoke-'));
 async function moduleFor(file,suffix='') {
@@ -14,6 +15,8 @@ async function moduleFor(file,suffix='') {
   return import(pathToFileURL(output));
 }
 try {
+  const {verifyBinaryBoundaries}=await import('./binary-regression.mjs');
+  await verifyBinaryBoundaries(moduleFor);
   const {verifyMathPipeline}=await import('./math-regression.mjs');
   await verifyMathPipeline(moduleFor);
   const {verifyDocumentStructure}=await import('./document-structure-regression.mjs');
@@ -197,17 +200,18 @@ try {
   const region={left:0,bottom:0,right:10,top:10};
   const pngBytes=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC','base64');
   function mockSnippet(mode){
+    const boundary=binaryBoundaryFixture();
     const state={renders:0,cancels:0,opens:0,scales:[],canvases:[]};
-    const target={closed:false,document:{createElementNS:()=>{const canvas={width:0,height:0,getContext:()=>({}),toBlob:callback=>{if(mode!=='encode-hang')callback(new Blob([pngBytes]));}};state.canvases.push(canvas);return canvas;}}};
+    const target={closed:false,document:{createElementNS:()=>{const canvas={width:0,height:0,getContext:()=>({}),toBlob:callback=>{if(mode!=='encode-hang')callback(mode==='xray'?{arrayBuffer:async()=>boundary.wrap(pngBytes.buffer.slice(pngBytes.byteOffset,pngBytes.byteOffset+pngBytes.byteLength))}:new Blob([pngBytes]));}};state.canvases.push(canvas);return canvas;}}};
     const page={getViewport:({scale})=>{state.scales.push(scale);return{convertToViewportRectangle:()=>[0,0,40,40]};},render:options=>{
       state.renders++;assert.equal(options.intent,'print','inactive source tab must not use animation frames');assert.equal(options.annotationMode,0);
       return{promise:mode==='hang'||(mode==='retry'&&state.renders===1)?new Promise(()=>{}):Promise.resolve(),cancel:()=>state.cancels++};
     }};
     const app={pdfDocument:{getPage:async()=>page},pdfViewer:{container:{ownerDocument:{defaultView:target}}}};
     const host={getMainWindow:()=>({AbortController}),Promise:{delay:ms=>new Promise(r=>setTimeout(r,ms))},Reader:{open:async()=>{state.opens++;return{_iframeWindow:{wrappedJSObject:{PDFViewerApplication:app}}};}}};
-    return{state,host,utilities:{waiveXrays:x=>x,cloneInto:x=>x}};
+    return{state,host,utilities:{waiveXrays:x=>x,cloneInto:boundary.cloneInto}};
   }
-  for(const mode of ['ok','retry']){
+  for(const mode of ['ok','retry','xray']){
     const mock=mockSnippet(mode),callback=await snippetRenderer(mock.host,{id:1},mock.utilities,undefined,{timeoutMS:10});
     assert.deepEqual([...await callback(10,region)],[...pngBytes]);
     assert.equal(mock.state.renders,mode==='retry'?2:1);
@@ -510,7 +514,7 @@ try {
   const uiDocument={readyState:'loading',createElement:uiElement,getElementsByTagName:()=>[],getElementById:id=>{queries++;return elements.get(id)||null;},body:{classList:{toggle(){}}}};
   let finishProject;
   let storedUISettings={baseURL:'https://api.deepseek.com/v1',model:'deepseek-flash',prompt:''};
-  const bridge={binding:{id:1,libraryID:1,key:'SOURCE01',title:'Synthetic startup check'},settings:()=>storedUISettings,saveSettings:async value=>{storedUISettings=value;},hasKey:()=>false,preferBilingual:()=>true,
+  const bridge={binding:{id:1,libraryID:1,key:'SOURCE01',title:'Synthetic startup check'},cloneBytes:structuredClone,settings:()=>storedUISettings,saveSettings:async value=>{storedUISettings=value;},hasKey:()=>false,preferBilingual:()=>true,
     item:{getField:()=> 'Synthetic startup check'},acquire:()=>()=>{},loadProject:()=>new Promise(resolve=>{finishProject=resolve;})};
   const uiWindow={arguments:[bridge],addEventListener:(name,fn)=>events.set(name,fn)};
   const uiContext=vm.createContext({window:uiWindow,document:uiDocument,setTimeout,clearTimeout,setInterval,clearInterval,AbortController,TextEncoder,TextDecoder,URL,console});
@@ -817,6 +821,23 @@ try {
   cancelledLegacy.abort();
   await assert.rejects(render(project,sourceBytes,fontBytes,false,cancelledLegacy.signal,()=>{}),{name:'AbortError'});
   console.log('PASS PDF generation cancellation');
+  const boundary=binaryBoundaryFixture();let uiPDF;
+  loadedProject.pages=[{viewRect:[0,0,612,792]}];
+  loadedProject.blocks=[{id:'ui-binary',kind:'body',source:'Keep the translation when crossing windows.',translation:'跨窗口传递后，译文仍然完整。',edited:true,rects:[[0,40,600,550,700]]}];
+  bridge.sourceBytes=async()=>boundary.wrap(sourceBytes);
+  bridge.fontBytes=async()=>boundary.wrap(fontBytes);
+  bridge.monoFontBytes=async()=>boundary.wrap(monoBytes);
+  bridge.cloneBytes=boundary.cloneInto;
+  bridge.attachPDF=async(_item,_project,bytes)=>{uiPDF=new Uint8Array(bytes);return{preferredSet:false};};
+  elements.get('vision-before-review').checked=false;
+  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  const uiDeadline=Date.now()+30000;
+  while(elements.get('task-progress').attributes.get('data-busy')==='true'&&Date.now()<uiDeadline)await new Promise(r=>setTimeout(r,10));
+  assert.ok(uiPDF,'the workbench clones source PDF and both fonts before rendering and returns an attachment');
+  assert.equal((await PDFDocument.load(uiPDF)).getPageCount(),1);
+  assert.match(elements.get('status').textContent,/已生成.*PDF/);
+  assert.equal(boundary.targets.length,3,'clone each of the PDF, serif font and mono font into the consumer realm');
+  console.log('PASS workbench binary boundary: wrapped PDF and both fonts produce a real one-page attachment');
   const outputDir=process.env.PAPERWEAVE_SMOKE_OUTPUT;
   if(outputDir) { await mkdir(outputDir,{recursive:true});await writeFile(join(outputDir,'layout-B-smoke.pdf'),result);await writeFile(join(outputDir,'layout-B-revised.pdf'),revised);await writeFile(join(outputDir,'placements.json'),JSON.stringify(placements,null,2)); }
   project.blocks[1].translation='';

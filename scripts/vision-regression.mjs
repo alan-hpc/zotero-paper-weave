@@ -27,6 +27,9 @@ export async function verifyVision(moduleFor){
   await captureVisionImages(project,block,draw,store,signal,()=>{});assert.equal(renders,1,'local PNG is reused');
   files.set([...files.keys()][0],new Uint8Array([1,2]));
   await captureVisionImages(project,block,draw,store,signal,()=>{});assert.equal(renders,2,'corrupt local image is regenerated');
+  const xrayError=()=>{throw new Error('Accessing TypedArray data over Xrays is forbidden.');};
+  await assert.rejects(captureVisionImages(project,block,draw,{read:xrayError,write:store.write},signal,()=>{}),/读取原文截图缓存失败.*Xrays/);
+  await assert.rejects(captureVisionImages(project,block,draw,{read:async()=>null,write:xrayError},signal,()=>{}),/保存原文截图失败.*Xrays/);
   const stop=new AbortController();stop.abort();
   await assert.rejects(captureVisionImages(project,block,draw,store,stop.signal,()=>{}),{name:'AbortError'});
   const cancelled=new AbortController(),beforeWrite=writes;files.clear();

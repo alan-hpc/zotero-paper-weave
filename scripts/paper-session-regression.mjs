@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {binaryBoundaryFixture} from './binary-fixture.mjs';
 
 export async function verifyPaperSessions(moduleFor){
   const old=new Map(['Zotero','Services','IOUtils','PathUtils','Cu'].map(k=>[k,globalThis[k]]));
@@ -50,7 +51,7 @@ export async function verifyPaperSessions(moduleFor){
     globalThis.IOUtils={readUTF8:async path=>{if(!files.has(path))throw Object.assign(new Error('missing'),{name:'NotFoundError'});return files.get(path);},
       exists:async()=>true,makeDirectory:async()=>{},read:async()=>new Uint8Array([1,2]),
       writeUTF8:async(path,value)=>{writes.push({path,project:JSON.parse(value)});files.set(path,value);}};
-    globalThis.PathUtils={join:(...parts)=>parts.join('/')};globalThis.Cu={isDeadWrapper:()=>false};
+    globalThis.PathUtils={join:(...parts)=>parts.join('/')};globalThis.Cu={isDeadWrapper:()=>false,cloneInto:structuredClone};
     controller=await moduleFor('src/controller.ts','paper-session');
     await controller.start({id:'session-test',version:'test',rootURI:'file:///addon/'});
 
@@ -93,15 +94,16 @@ export async function verifyPaperSessions(moduleFor){
     assert.equal(writes.at(-1).project.source.key,replay.key);
     // A late A screenshot remains bound to A after B becomes the visible workbench.
     const imageFiles=new Map(),imagePaths=[],screenshotItems=[];
+    const boundary=binaryBoundaryFixture();
     const png=new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC','base64'));
     const target={closed:false,document:{createElementNS:()=>({width:0,height:0,getContext:()=>({}),toBlob:cb=>cb(new Blob([png]))})}};
     const pdf={getPage:async()=>({getViewport:()=>({convertToViewportRectangle:()=>[0,0,40,40]}),render:()=>({promise:Promise.resolve(),cancel(){}})})};
     const readBefore=IOUtils.read;
-    IOUtils.read=async path=>{if(imageFiles.has(path))return imageFiles.get(path);throw Object.assign(new Error('missing image'),{name:'NotFoundError'});};
-    IOUtils.write=async(path,bytes)=>{imagePaths.push(path);imageFiles.set(path,bytes);};
+    IOUtils.read=async path=>{if(imageFiles.has(path))return boundary.wrap(imageFiles.get(path));throw Object.assign(new Error('missing image'),{name:'NotFoundError'});};
+    IOUtils.write=async(path,bytes)=>{assert.ok(boundary.wasCloned(bytes),'PNG data is cloned into the storage API realm before writing');assert.ok(boundary.targets.includes(IOUtils));imagePaths.push(path);imageFiles.set(path,bytes);};
     Zotero.getMainWindow=()=>({AbortController});Zotero.Promise={delay:async()=>{}};
     Zotero.Reader.open=async id=>{screenshotItems.push(id);return{_iframeWindow:{wrappedJSObject:{PDFViewerApplication:{pdfDocument:pdf,pdfViewer:{container:{ownerDocument:{defaultView:target}}}}}}};};
-    Cu.waiveXrays=value=>value;Cu.cloneInto=value=>value;
+    Cu.waiveXrays=value=>value;Cu.cloneInto=boundary.cloneInto;
     const screenshots=await replayBridge.visionImages(replay,projectFor(replay),'p0-0',new AbortController().signal,()=>{});
     assert.equal(screenshots.length,1);assert.deepEqual(screenshotItems,[replay.id]);
     assert.ok(imagePaths.every(path=>path.includes('1-REPLAY01-identical-bytes')));
@@ -138,6 +140,15 @@ export async function verifyPaperSessions(moduleFor){
     await controller.openWorkbench(main,output.id);
     assert.equal(created.length,count);assert.match(alerts.at(-1),/对应关系不一致/);
     assert.equal(imports,0);
+    // IOUtils buffers are wrapped on input, and must be native to IOUtils on output.
+    IOUtils.read=async()=>boundary.wrap(png);
+    assert.deepEqual([...await replayBridge.sourceBytes(replay,projectFor(replay))],[...png]);
+    Zotero.Libraries={get:()=>({editable:true,filesEditable:true})};Zotero.getTempDirectory=()=>({path:'/mock/temp'});
+    Zotero.Prefs.set=()=>{};IOUtils.remove=async()=>{};
+    Zotero.Attachments.importFromFile=async args=>{imports++;assert.equal(args.parentItemID,replay.parentID);return{id:4,key:'NEWPDF04',libraryID:1};};
+    const attachment=await replayBridge.attachPDF(replay,projectFor(replay),new Uint8Array([37,80,68,70]),false);
+    assert.equal(attachment.key,'NEWPDF04');assert.equal(imports,1);
+    assert.ok(imagePaths.some(path=>path.endsWith('.pdf')),'PDF output uses the same cloned binary write boundary');
   }finally{
     await controller?.stop();
     for(const [key,value]of old)if(value===undefined)delete globalThis[key];else globalThis[key]=value;

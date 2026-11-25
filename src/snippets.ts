@@ -1,4 +1,5 @@
 import { bounded } from './async';
+import { copyBytes } from './bytes';
 
 export interface RegionBox {left:number;bottom:number;right:number;top:number}
 interface Session {pdf:any;targetWindow:any}
@@ -58,7 +59,7 @@ export async function snippetRenderer(host:any,item:any,utilities:any,setupSigna
           const blob:Blob=await new Promise((resolve,reject)=>canvas.toBlob((b:Blob|null)=>b?resolve(b):reject(new Error('原文图像编码失败。')),'image/png'));
           local.signal.throwIfAborted();
           const bytes=await blob.arrayBuffer();local.signal.throwIfAborted();
-          return new Uint8Array(bytes);
+          return copyBytes(bytes,(value,target)=>utilities.cloneInto(value,target));
         },signal,timeoutMS,label,cancel);
       }catch(error){
         signal.throwIfAborted();lastError=error;session=undefined;

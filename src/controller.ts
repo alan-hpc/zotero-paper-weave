@@ -12,6 +12,7 @@ import { assertAttachment, assertProjectIdentity } from './paperIdentity';
 import { snippetRenderer } from './snippets';
 import { captureVisionImages } from './visionCapture';
 import { visionMatches } from './vision';
+import { copyBytes,ByteSource } from './bytes';
 
 let meta: { id: string; version: string; rootURI: string };
 const menus = new Map<any, { nodes: any[]; popup: any; listener: any }>();
@@ -182,12 +183,12 @@ export async function loadProject(item: any, progress: (s: string) => void, sign
 export async function sourceBytes(item: any, project: Project) {
   const hash=await item.attachmentHash;
   assertProjectIdentity(project,{libraryID:item.libraryID,key:item.key,hash});
-  return IOUtils.read(await item.getFilePathAsync());
+  return copyBytes(await IOUtils.read(await item.getFilePathAsync()),(value,target)=>Cu.cloneInto(value,target));
 }
 export async function fontBytes() {
-  return readAsset(Zotero.getMainWindow().XMLHttpRequest, meta.rootURI + 'chrome/content/fonts/NotoSerifSC-Regular.ttf');
+  return readAsset(Zotero.getMainWindow().XMLHttpRequest, meta.rootURI + 'chrome/content/fonts/NotoSerifSC-Regular.ttf',(value,target)=>Cu.cloneInto(value,target));
 }
-export async function monoFontBytes() { return readAsset(Zotero.getMainWindow().XMLHttpRequest, meta.rootURI + 'chrome/content/fonts/SarasaMonoSC-Regular.ttf'); }
+export async function monoFontBytes() { return readAsset(Zotero.getMainWindow().XMLHttpRequest, meta.rootURI + 'chrome/content/fonts/SarasaMonoSC-Regular.ttf',(value,target)=>Cu.cloneInto(value,target)); }
 export function preferBilingual() { return Zotero.Prefs.get(pref + 'preferBilingual', true) !== false; }
 export async function preferOriginal(item: any) {
   if (!item.parentID) throw new Error('独立 PDF 没有父论文条目；请直接打开原文附件。');
@@ -202,7 +203,7 @@ export async function attachPDF(item: any, project: Project, bytes: Uint8Array, 
   const stamp = now().replace(/[:.]/g, '-');
   const filename = `PaperWeave-${item.key}-${stamp}.pdf`;
   const temp = PathUtils.join(Zotero.getTempDirectory().path, filename);
-  await IOUtils.write(temp, bytes, { permissions: 0o600 });
+  await IOUtils.write(temp, Cu.cloneInto(bytes,IOUtils), { permissions: 0o600 });
   try {
     const args: any = { file: temp, title: `${project.source.title}__${stamp.slice(0,19)}`,
       fileBaseName: filename.slice(0,-4), renameIfAllowedType: false };
@@ -296,6 +297,7 @@ function createWorkbenchBridge(item:any,sessionID:string){
     if(loadedHash&&project.source.hash!==loadedHash)throw new Error('原 PDF 已变化，请重新打开目标论文。');
   };
   return Object.freeze({item,binding,meta,settings,hasKey,apiKey,saveSettings,
+    cloneBytes:(value:ByteSource,target:object)=>Cu.cloneInto(value,target),
     loadProject:async(requested:any,progress:(s:string)=>void,signal:AbortSignal)=>{
       checkItem(requested);const project=await loadProject(item,progress,signal);
       await checkProject(project);loadedHash=project.source.hash;return project;
@@ -310,8 +312,8 @@ function createWorkbenchBridge(item:any,sessionID:string){
       await IOUtils.makeDirectory(folder,{createAncestors:true,ignoreExisting:true,permissions:0o700});
       drawVision ||= await snippetRenderer(Zotero,item,Cu,undefined,{maxScale:3,maxPixels:4000000,maxDimension:8192});
       const images=await captureVisionImages(project,block,drawVision,{
-        read:async key=>{try{return new Uint8Array(await IOUtils.read(PathUtils.join(folder,key+'.png')));}catch(e:any){if(e.name==='NotFoundError')return null;throw e;}},
-        write:async(key,bytes)=>{signal.throwIfAborted();await IOUtils.write(PathUtils.join(folder,key+'.png'),bytes,{permissions:0o600});}
+        read:async key=>{try{return copyBytes(await IOUtils.read(PathUtils.join(folder,key+'.png')),(value,target)=>Cu.cloneInto(value,target));}catch(e:any){if(e.name==='NotFoundError')return null;throw e;}},
+        write:async(key,bytes)=>{signal.throwIfAborted();await IOUtils.write(PathUtils.join(folder,key+'.png'),Cu.cloneInto(bytes,IOUtils),{permissions:0o600});}
       },signal,progress);
       await checkProject(project);signal.throwIfAborted();return images;
     },

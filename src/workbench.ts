@@ -6,6 +6,7 @@ import { CODEX_DEFAULT, PROVIDERS, PROVIDER_LABELS, resolveSettings } from './se
 import { planProviders } from './routing';
 import { applyGraphicRegions } from './graphics';
 import { recognizeVision,activateVision,visionMatches,visionNeedsReview,visionTranslationKey,editVisionText,VisionImage } from './vision';
+import {copyBytes} from './bytes';
 
 async function initialize() {
 const host = (window as any).arguments[0];
@@ -428,14 +429,15 @@ async function generatePDF(signal: AbortSignal) {
   const mathReview=new Set<string>();
   phase('准备 PDF 排版');
   status('正在准备 PDF 排版…');
-  const bytes = await host.sourceBytes(host.item,project);
-  const font = await host.fontBytes();
-  const monoFont = await host.monoFontBytes();
-  const output = await render(project!, new Uint8Array(bytes), new Uint8Array(font), false, signal,message=>{
+  const clone=(value:Uint8Array|ArrayBuffer,target:object)=>host.cloneBytes(value,target);
+  const bytes = copyBytes(await host.sourceBytes(host.item,project),clone);
+  const font = copyBytes(await host.fontBytes(),clone);
+  const monoFont = copyBytes(await host.monoFontBytes(),clone);
+  const output = await render(project!, bytes, font, false, signal,message=>{
     const step=message.match(/^(60\/40 逐页排译) (\d+)\/(\d+)/);
     if(step)phase(step[1],Number(step[2])-1,Number(step[3]),'页');else phase('写入 PDF');
     status(message);
-  },{monoFontBytes:new Uint8Array(monoFont),onPlacement:p=>{
+  },{monoFontBytes:monoFont,onPlacement:p=>{
     if(p.mathReview){mathReview.add(p.blockID);const block=project!.blocks.find(b=>b.id===p.blockID);if(block)block.translationNeedsRefresh=true;}
   }});
   signal.throwIfAborted();

@@ -8,12 +8,18 @@ export async function captureVisionImages(project:Project,block:Block,
   const inputKey=visionInputKey(project,block),output:VisionImage[]=[];
   for(const [index,region]of visionCrops(project,block).entries()){
     signal.throwIfAborted();const key=inputKey+'-'+index;
-    let bytes=await store.read(key),dataURL:string|undefined;
+    let bytes:Uint8Array|null,dataURL:string|undefined;
+    try{bytes=await store.read(key);}catch(error){
+      signal.throwIfAborted();throw new Error(`读取原文截图缓存失败：${error instanceof Error?error.message:'图像数据不可用'}`);
+    }
     if(bytes)try{dataURL=pngDataURL(bytes);}catch{bytes=null;}
     if(!bytes){
       progress(`截图 ${index+1}/${block.rects.length} · 源页 ${region.pageIndex+1}`);
       bytes=await draw(region.pageIndex,region.box,signal,progress);signal.throwIfAborted();
-      dataURL=pngDataURL(bytes);await store.write(key,bytes);
+      dataURL=pngDataURL(bytes);
+      try{await store.write(key,bytes);}catch(error){
+        signal.throwIfAborted();throw new Error(`保存原文截图失败：${error instanceof Error?error.message:'图像数据不可用'}`);
+      }
     }
     signal.throwIfAborted();
     output.push({...region,dataURL:dataURL!,fingerprint:visionFingerprint(dataURL!)});
