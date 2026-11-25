@@ -6,9 +6,8 @@ import { bounded } from './async';
 import { translatedBoldRanges } from './formatting';
 import { graphicGroups, GraphicGroup } from './graphics';
 import { listInfo, listText } from './lists';
-import { inlineMathText, mathReviewRequired } from './inlineMath';
 import { latexBox, drawLatex } from './latex';
-import { sourceMathLatex } from './mathPresentation';
+import { inlineMathPlan } from './mathPresentation';
 import { visionRenderBlock } from './vision';
 
 /** Design B: keep each complete source page on the left, with translation on the right. */
@@ -171,22 +170,8 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
     const list=listInfo(block);
     const markerWidth=list?(list.ordered?Math.max(14,zhFont.widthOfTextAtSize(list.marker,size)+6):14):0;
     const textInset=(heading?0:21)+(list?Math.min(list.depth,8)*14:0)+markerWidth;
-    const automaticLatex=new Map<number,string>();
-    for(const [index,span]of (block.mathSpans||[]).entries()){
-      const tex=sourceMathLatex(block.source.slice(span.start,span.end),span);if(!tex)continue;
-      try{latexBox(tex);automaticLatex.set(index,tex);}catch{/* Preserve the whole source paragraph when conversion cannot be verified. */}
-    }
-    const rewritten=inlineMathText(block,block.translation,translatedBoldRanges(block),(_span,index)=>
-      automaticLatex.has(index)?`\\(${automaticLatex.get(index)}\\)`:`\uE000PWMS${index}\uE001`);
-    const matched=(rewritten.matchedMath||[]).filter(index=>!rewritten.retainedMath?.includes(index));
-    const uncertainInline=matched.some(index=>!automaticLatex.has(index));
-    const oversized=matched.some(index=>{
-      const span=block.mathSpans![index];
-      const widths=span.rects.map(r=>(r[3]-r[1])/span.fontSize);
-      return (span.flow==='wrapped'?widths.reduce((a,b)=>a+b,0):Math.max(...widths,0))*size>(ZW-textInset)*2;
-    });
-    const sourceReview=!!block.sourceRepairReason&&!!block.translationNeedsRefresh;
-    if(mathReviewRequired(block,rewritten)||oversized||sourceReview||uncertainInline){
+    const {rewritten,uncertainInline,oversized,sourceReview,needsReview}=inlineMathPlan(block,translatedBoldRanges(block),{size,width:ZW-textInset});
+    if(needsReview){
       // An old draft with no provable formula correspondence must not print flattened math.
       // Preserve its original paragraph and retain the editable Chinese in the project.
       const pages=new Map<number,{left:number;bottom:number;right:number;top:number}>();

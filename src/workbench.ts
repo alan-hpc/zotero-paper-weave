@@ -2,11 +2,10 @@ import { Block, Kind, ModelEndpoint, Project, ProviderName, Settings, Term, EXTR
 import { Provider, RequestProgress, recordTranslation,ModelServiceError } from './provider';
 import { render } from './render';
 import { formatDuration, requestProgressText } from './progress';
-import { mathReviewRequired } from './inlineMath';
 import { CODEX_DEFAULT, PROVIDERS, PROVIDER_LABELS, resolveSettings } from './settings';
 import { planProviders } from './routing';
 import { applyGraphicRegions } from './graphics';
-import { recognizeVision,activateVision,visionMatches,visionNeedsReview,visionRenderBlock,visionTranslationKey,editVisionText,VisionImage } from './vision';
+import { recognizeVision,activateVision,visionMatches,visionNeedsReview,visionTranslationKey,editVisionText,VisionImage } from './vision';
 
 async function initialize() {
 const host = (window as any).arguments[0];
@@ -132,7 +131,7 @@ async function provider(signal: AbortSignal) {
   }), settings };
 }
 const labels: Record<Kind,string> = { body:'正文', heading:'标题', figure:'图', caption:'图注 / 表注', table:'表格', math:'公式', code:'代码', reference:'参考文献', keep:'保留英文' };
-const needsReview=(block:Block)=>!block.originalGraphic&&!(block.frontMatter&&block.kind==='keep')&&(!!block.translationNeedsRefresh||mathReviewRequired(visionRenderBlock(block))||visionRenderBlock(block).mathSpans?.some(s=>s.representation==='review')===true);
+const needsReview=visionNeedsReview;
 function updateControls() {
   const locked=busy||switching;
   document.body.classList.toggle('busy', locked);
@@ -337,7 +336,7 @@ bind('translate', () => run(async signal => {
   const { client, settings } = await provider(signal);
   await translateRemaining(client, settings, signal);
 }));
-bind('repair-review',()=>run(async signal=>{
+async function repairReview(signal:AbortSignal){
   if(!project!.blocks.some(b=>canTranslate(b)&&needsReview(b)&&!b.edited)){
     status('没有需要自动重译的段落；人工修订请逐段复核。');return;
   }
@@ -348,6 +347,9 @@ bind('repair-review',()=>run(async signal=>{
     for(const [index,b]of candidates.entries()){
       phase('图片识别需复核段落',index,candidates.length,'段');
       try{
+        // Explicitly adopted OCR is authoritative even if the model originally
+        // reported uncertainty. A retry must not undo the user's review.
+        if(b.vision?.active&&visionMatches(project!,b)){eligible.add(b.id);continue;}
         await recognizeBlock(b,vision,signal);
         if(b.vision!.status!=='ready'||!['body','heading'].includes(b.vision!.kind)){unresolved.push(b.id);continue;}
         activateVision(project!,b);revision++;dirty=true;await save();eligible.add(b.id);
@@ -361,7 +363,8 @@ bind('repair-review',()=>run(async signal=>{
   const {client,settings}=await provider(signal);
   await translateRemaining(client,settings,signal,true,eligible);
   status(`需复核的自动译文已更新并保存；人工修订保持保留。${unresolved.length?` ${unresolved.length} 段图片识别仍需人工核对。`:'可生成新 PDF。'}`);
-}));
+}
+bind('repair-review',()=>run(repairReview));
 async function visionClient(signal:AbortSignal){
   const saved=await persistSettings(),profile=saved.routing.deepseek;
   if(!saved.routing.enabled.deepseek)throw new Error('图片识别需要启用 DeepSeek，并填写其地址、模型和 Key。');
@@ -447,6 +450,16 @@ bind('start', () => run(async signal => {
   if(project!.blocks.some(block=>canTranslate(block)&&!block.translation.trim())) {
     const { client, settings } = await provider(signal);
     await translateRemaining(client, settings, signal);
+  }
+  if(input('vision-before-review').checked&&project!.blocks.some(b=>canTranslate(b)&&needsReview(b)&&!b.edited)){
+    await repairReview(signal);
+    const unresolved=project!.blocks.filter(b=>canTranslate(b)&&needsReview(b)&&!b.edited);
+    if(unresolved.length){
+      ($('filter') as HTMLSelectElement).value='math-review';list();select(unresolved[0]);
+      ($('vision-panel') as HTMLDetailsElement).open=true;
+      status(`已保存识别及翻译进度；${unresolved.map(b=>b.id).join('、')} 共 ${unresolved.length} 段仍需核对，本次未生成 PDF。请对照原图修订并采用识别结果，再点击「翻译并生成 PDF」。`);
+      return;
+    }
   }
   await generatePDF(signal);
 }));

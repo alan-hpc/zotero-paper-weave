@@ -1,7 +1,8 @@
 import type {Block,Project,Settings,Rect} from './model';
 import type {Provider} from './provider';
-import {LATEX_EXPRESSION,latexBody,mathReviewRequired} from './inlineMath';
+import {LATEX_EXPRESSION,latexBody} from './inlineMath';
 import {latexBox} from './latex';
+import {inlineMathPlan} from './mathPresentation';
 
 export const VISION_PROTOCOL=1;
 export interface VisionImage {pageIndex:number;box:{left:number;bottom:number;right:number;top:number};dataURL:string;fingerprint:string}
@@ -23,7 +24,7 @@ export function visionMatches(project:Project,b:Block):boolean {
   const v=b.vision;return !!v&&v.protocol===VISION_PROTOCOL&&v.sourceKey===project.source.key&&v.sourceHash===project.source.hash&&v.blockID===b.id&&v.inputKey===visionInputKey(project,b);
 }
 export const visionNeedsReview=(b:Block)=>!b.originalGraphic&&!b.frontMatter&&(b.kind==='body'||b.kind==='heading')&&
-  (!!b.translationNeedsRefresh||!!b.sourceRepairReason||mathReviewRequired(visionRenderBlock(b))||visionRenderBlock(b).mathSpans?.some(s=>s.representation==='review')===true);
+  (!!b.translationNeedsRefresh||!!b.sourceRepairReason||inlineMathPlan(visionRenderBlock(b)).needsReview||visionRenderBlock(b).mathSpans?.some(s=>s.representation==='review')===true);
 
 export function pngDataURL(bytes:Uint8Array):string {
   if(bytes.length<33||bytes.length>6*1024*1024||![137,80,78,71,13,10,26,10].every((v,i)=>bytes[i]===v)||

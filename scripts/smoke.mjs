@@ -639,6 +639,7 @@ try {
   console.log('PASS selective repair: successful replacement only, failure retention, manual-edit protection and unrelated pending blocks');
 
   const visionTools=await moduleFor('src/vision.ts');
+  bridge.saveSettings=async value=>{storedUISettings=value;};
   loadedProject.pages=[{viewRect:[0,0,612,792]}];
   let imageRequests=0,visionCalls=0,afterVisionCalls=0;
   bridge.visionImages=async(_item,p,id)=>{
@@ -679,6 +680,47 @@ try {
   assert.equal(loadedProject.blocks[0].translation,'人工修订后的译文。');
   assert.ok(afterVisionCalls>=2&&imageRequests>=3);assert.equal(cachedSourceReads,2,'vision operations do not generate or replace an attachment');
   console.log('PASS workbench vision: local-only preview, cached candidate persistence, explicit adoption, selected retranslation and opt-in review repair with manual-edit protection');
+
+  // The primary action must repair a complete cached translation before export,
+  // including math that the old review filter only discovered during rendering.
+  loadedProject.blocks.splice(5);
+  const primaryReview=loadedProject.blocks[3];
+  const resetPrimaryReview=()=>{
+    Object.assign(primaryReview,{source:'Use ∑x in this paragraph.',translation:'旧译文使用 ∑x。',edited:false,translationNeedsRefresh:false,
+      mathSpans:[{start:4,end:6,representation:'source',rects:[[0,100,640,120,655]],fontSize:10,baselines:[642],features:['symbol'],reason:'fixture'}]});
+    delete primaryReview.vision;delete primaryReview.translationVisionKey;delete primaryReview.sourceRepairReason;delete primaryReview.translationMathRefs;
+  };
+  resetPrimaryReview();let uncertainPrimary=false;
+  uiContext.fetch=async(_url,options)=>{
+    const body=JSON.parse(options.body),content=body.messages[1].content;
+    if(Array.isArray(content)){
+      visionCalls++;const payload=JSON.parse(content[0].text);
+      return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({block_id:payload.block_id,kind:'body',source_text:String.raw`Use \(\sum x\) in this paragraph.`,uncertain:uncertainPrimary,issues:uncertainPrimary?['Check the summation boundary.']:[]})}}]})};
+    }
+    afterVisionCalls++;const payload=JSON.parse(content);
+    return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({translation:'主按钮图片修复译文 '+payload.paragraph})}}]})};
+  };
+  const primaryVisionBefore=visionCalls;
+  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.equal(visionCalls,primaryVisionBefore+1,'primary action recognizes unsupported math before PDF generation even with a full translation cache');
+  assert.equal(primaryReview.translationVisionKey,primaryReview.vision.cacheKey);
+  assert.ok(primaryReview.translation.startsWith('主按钮图片修复译文'));
+  assert.equal(cachedSourceReads,3,'successful recognition and translation reach PDF generation');
+  assert.equal(loadedProject.blocks[0].translation,'人工修订后的译文。');assert.equal(loadedProject.blocks[0].edited,true);
+  resetPrimaryReview();uncertainPrimary=true;
+  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.equal(cachedSourceReads,3,'uncertain recognition stops before producing another unchanged fallback PDF');
+  assert.equal(primaryReview.translation,'旧译文使用 ∑x。');assert.equal(primaryReview.vision.active,false);
+  assert.equal(elements.get('filter').value,'math-review');assert.equal(elements.get('vision-panel').open,true);
+  assert.match(elements.get('status').textContent,/仍需核对.*未生成 PDF/);
+  const explicitVisionBefore=visionCalls;
+  elements.get('vision-apply').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.equal(primaryReview.vision.active,true);
+  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.equal(visionCalls,explicitVisionBefore,'a retry uses explicitly adopted recognition rather than rejecting its original uncertainty again');
+  assert.equal(primaryReview.translationVisionKey,primaryReview.vision.cacheKey);assert.equal(cachedSourceReads,4);
+  assert.equal(primaryReview.vision.issues.length,1,'user adoption retains the original recognition issue for provenance');
+  console.log('PASS primary vision workflow: full cached PDF repair, shared review detection, manual revisions, uncertain-result hold and explicit-adoption resume');
 
   const {render,LAYOUT}=await moduleFor('src/render.ts');
   const doc=await PDFDocument.create();const page=doc.addPage([612,792]);

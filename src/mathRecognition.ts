@@ -75,6 +75,7 @@ const operand=(s:string)=>/[\p{L}\p{N}∆∇∑∏√∫∂∞ℒ]/u.test(s);
 const scriptless=(s:string)=>s.replace(new RegExp(SCRIPT,'gu'),'');
 const opening=/^[([{]$/u,closing=/^[)\]}]$/u;
 const paired:Record<string,string>={')':'(',']':'[','}':'{'};
+const numericMultiplier=(text:string)=>/^\d+(?:\.\d+)?(?:[eE][-+−]?\d+)?\s*×$/u.test(text.trim());
 
 function candidates(source:string,fragments:Fragment[]):Token[][] {
   const result:Token[][]=[];let tokens:Token[]=[],previous=0;
@@ -85,7 +86,8 @@ function candidates(source:string,fragments:Fragment[]):Token[][] {
     let changed=true;
     while(tokens.length&&changed){
       changed=false;const last=tokens.at(-1)!;
-      if(/^[\s,]+$/u.test(last.text)||/^[:=+\-−–*/×÷±∓⋅·<>]$/u.test(last.text)){tokens.pop();changed=true;continue;}
+      if(/^[\s,]+$/u.test(last.text)||/^[:=+\-−–*/×÷±∓⋅·<>]$/u.test(last.text)&&
+        !(last.text==='×'&&numericMultiplier(tokens.map(t=>t.text).join('')))){tokens.pop();changed=true;continue;}
       const plain=scriptless(tokens.map(t=>t.text).join(''));
       if(closing.test(last.text)&&[...plain].filter(c=>c===last.text).length>[...plain].filter(c=>c===paired[last.text]).length){tokens.pop();changed=true;}
       else if(opening.test(last.text)){tokens.pop();changed=true;}
@@ -105,7 +107,9 @@ function candidates(source:string,fragments:Fragment[]):Token[][] {
   // Isolated italic atoms retain their leaf boundary even when extraction glued them to prose.
   for(const f of fragments)if(f.italic&&/^[A-Za-z\u0370-\u03FF]$/u.test(source.slice(f.start,f.end))&&
     !lexical.some(t=>t.start<=f.start&&t.end>=f.end))lexical.push({start:f.start,end:f.end,text:source.slice(f.start,f.end)});
-  const excluded=[...source.matchAll(/(?:https?:\/\/|www\.)[^\s]+|\babs\/\d{4}\.\d{4,5}/gu)]
+  // PDF extraction can insert a space between the scheme and slashes. The URL
+  // path remains literal text even when it contains letters, digits and operators.
+  const excluded=[...source.matchAll(/(?:https?\s*:\s*\/\s*\/|www\s*\.)[^\s]+|\babs\s*\/\s*\d{4}\.\d{4,5}/giu)]
     .map(m=>({start:m.index!,end:m.index!+m[0].length}));
   let depth=0;
   for(const token of lexical.sort((a,b)=>a.start-b.start||b.end-a.end)){
@@ -172,6 +176,7 @@ export function recognizeMath(source:string,nodes:MathNode[]):InlineMathSpan[] {
     if(/[+/×÷⋅·−]/u.test(text)&&tokens.filter(t=>operand(t.text)).length>1)features.push('operation');
     if(/\b[A-Za-z][A-Za-z0-9_]*\s*\(\s*[A-Za-z0-9\u0370-\u03FF]/u.test(text))features.push('function');
     if(/\d[eE][-+−]?\d/u.test(text))features.push('scientific-notation');
+    if(numericMultiplier(text))features.push('numeric-multiplier');
     if(stacked)features.push('stacked-layout');
     if(glyphs.some(g=>g.italic))features.push('italic-math');
     if(!features.length)continue;

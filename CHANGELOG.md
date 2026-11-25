@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-alpha.41
+
+- Fix false mathematical regions inside PDF-spaced URLs such as `https: //…/r/PDEVIS-3EDD/README.md`, and retain the multiplication suffix in numeric speedups such as `1.65×`. Refresh strictly compatible cached math metadata without changing saved translations or manual edits.
+- Run opt-in DeepSeek vision repair from the primary translate-and-generate action, including fully translated projects. Move the explicit screenshot-upload option beside the primary action and share formula review detection with PDF generation.
+- Hold PDF generation and open the review editor for uncertain or invalid recognition rather than silently exporting another source-paragraph fallback. Resume translation from explicitly adopted OCR without rejecting its original uncertainty again; keep manual translations and recognition provenance.
+- Add regressions for split URLs, numeric multipliers, cached migration, render/editor review agreement, primary-action vision repair, uncertain-result hold and adoption/resume. No native installation or real DeepSeek request has been performed for this version.
+
 ## 0.1.0-alpha.40
 
 - Add optional DeepSeek image transcription using the existing enabled DeepSeek endpoint, key and `deepseek-flash` model. Send bounded PNG regions with original image detail, non-thinking structured output, timeouts, cancellation and no cross-provider image fallback.

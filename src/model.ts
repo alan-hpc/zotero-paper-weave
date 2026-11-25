@@ -84,7 +84,7 @@ export interface ModelRouting {
 /** Top-level endpoint fields remain compatible with projects using a single provider. No keys. */
 export interface Settings extends ModelEndpoint { prompt: string; routing?: ModelRouting;visionBeforeReview?:boolean }
 export const PROMPT_VERSION = '9';
-export const EXTRACTION_VERSION = 9;
+export const EXTRACTION_VERSION = 10;
 export const canTranslate = (b: Block) => (b.kind === 'body' || b.kind === 'heading') && (!b.originalGraphic || !!b.kindEdited);
 export const now = () => new Date().toISOString();
 export function validateProject(p: unknown): asserts p is Project {

@@ -7,7 +7,9 @@ export async function verifyMathPipeline(moduleFor){
   const {styledRuns,wrapStyled,positionLine,runWidth}=await moduleFor('src/typography.ts');
   const {validateProject}=await moduleFor('src/model.ts');
   const {recognizeMath}=await moduleFor('src/mathRecognition.ts');
-  const {sourceMathLatex}=await moduleFor('src/mathPresentation.ts');
+  const {sourceMathLatex,inlineMathPlan}=await moduleFor('src/mathPresentation.ts');
+  const {visionNeedsReview}=await moduleFor('src/vision.ts');
+  const {reconcileExtraction}=await moduleFor('src/upgrade.ts');
   const {latexBox}=await moduleFor('src/latex.ts');
   for(const expression of ['j≤h','h < j < t','T×T','A_{js}=γ_{h+j+1:h+s}k^{⊤}_{h+j}k_{h+s}','B_{d}=diag(β_{h+1}, . . . , β_{h+T})']){
     const tex=sourceMathLatex(expression,{features:['scripts']});assert.ok(tex,expression);assert.ok(latexBox(tex).shapes.length);
@@ -65,6 +67,24 @@ export async function verifyMathPipeline(moduleFor){
   assert.deepEqual(recognizeMath('Contributors^{1}',[leaf('Contributors',40,650),leaf('1',130,655,{sup:true},7)]),[]);
   const proseURL='See abs/2107.03374, 2021 at https://arxiv.org/abs/2107.03374.';
   assert.deepEqual(recognizeMath(proseURL,[leaf(proseURL,40,650)]),[],'URLs and arXiv reference identifiers are not ratios');
+  for(const url of ['https: //anonymous.4open.science/r/PDEVIS-3EDD/README.md',
+    'https : / /example.org/r/PDEVIS-3EDD/README.md','http:\n//example.org/r/A-3','www.4open.science/r/PDEVIS-3EDD','abs / 2107.03374']){
+    const prose='The source code is available at '+url+'.';
+    assert.deepEqual(recognizeMath(prose,[leaf(prose,40,650)]),[],'PDF-spaced URL paths must not become math: '+url);
+  }
+  const abstract='The method speeds up drafting by up to 1.65× with minimal degradation. Source code: https: //anonymous.4open.science/r/PDEVIS-3EDD/README.md.';
+  const abstractMath=recognizeMath(abstract,[leaf(abstract,40,650)]);
+  assert.deepEqual(abstractMath.map(s=>abstract.slice(s.start,s.end)),['1.65×'],'keep the speedup suffix and exclude the complete split URL');
+  assert.match(sourceMathLatex('1.65×',abstractMath[0]),/times/u);
+  const reviewedAbstract={id:'abstract',kind:'body',source:abstract,rects:[[0,40,600,550,700]],translation:'速度最高提升1.65×，代码见 https: //anonymous.4open.science/r/PDEVIS-3EDD/README.md。',edited:true,mathSpans:abstractMath};
+  assert.equal(inlineMathPlan(reviewedAbstract).needsReview,false);
+  const oldAbstract={...structuredClone(reviewedAbstract),mathSpans:[...abstractMath,{
+    start:abstract.indexOf('/r/'),end:abstract.indexOf('/r/')+11,representation:'source',rects:[[0,40,600,100,610]],fontSize:10,baselines:[601],features:['operation'],reason:'old URL false positive'}],translationNeedsRefresh:true};
+  const oldProject={source:{hash:'same',title:'Drafting'},pages:[{viewRect:[0,0,612,792]}],blocks:[oldAbstract],extractionVersion:9};
+  assert.equal(reconcileExtraction(oldProject,{...oldProject,blocks:[structuredClone(reviewedAbstract)]}),true);
+  assert.equal(oldProject.blocks[0].translation,reviewedAbstract.translation,'math reclassification preserves existing wording');
+  assert.equal(oldProject.blocks[0].edited,true);assert.equal(oldProject.blocks[0].translationNeedsRefresh,false);
+  assert.equal(oldProject.extractionVersion,10,'old math metadata is refreshed without an API call');
   const touching='one T×T triangular solve';
   const touchingSpan=recognizeMath(touching,[leaf('one',100.0000000000001,650),leaf('T×T',115,650),leaf(' triangular solve',129.9,650)])[0];
   assert.equal(touching.slice(touchingSpan.start,touchingSpan.end),'T×T');
@@ -82,6 +102,10 @@ export async function verifyMathPipeline(moduleFor){
   };
   const source='Use R_{1} before X_{Q}, and preserve kernel.';
   const block={id:'b1',kind:'body',source,translation:'',edited:false,rects:[[0,40,600,550,700]],mathSpans:[span(source,'R_{1}'),span(source,'X_{Q}')]};
+  const unsupportedSource='Use ∑x in this paragraph.';
+  const unsupported={...block,source:unsupportedSource,translation:'使用 ∑x。',mathSpans:[span(unsupportedSource,'∑x')],translationNeedsRefresh:false};
+  assert.equal(inlineMathPlan(unsupported).uncertainInline,true);
+  assert.equal(visionNeedsReview(unsupported),true,'unsupported source math is eligible for vision before a PDF is generated');
   const project={source:{title:'Math binding regression'},terms:[{source:'kernel',reason:'fixture'}]};
   const provider=new Provider({baseURL:'https://example.test/v1',model:'mock',prompt:''},'',new AbortController().signal);
   provider.json=async(_system,payload)=>{
