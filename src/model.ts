@@ -1,3 +1,4 @@
+import type {VisionRecord} from './vision';
 export type Kind = 'body' | 'heading' | 'figure' | 'caption' | 'table' | 'math' | 'code' | 'reference' | 'keep';
 /** PDF user space: origin bottom left; [pageIndex, x0, y0, x1, y1]. */
 export type Rect = [number, number, number, number, number];
@@ -24,6 +25,9 @@ export interface Block {
   /** Derived physical ownership: interior text is emitted once in its complete original region. */
   originalGraphic?: {anchorID:string;family:'figure'|'table'|'caption'|'algorithm'};
   sourceRepairReason?: string;
+  vision?:VisionRecord;
+  visionHistory?:VisionRecord[];
+  translationVisionKey?:string;
   /** Author metadata remains on the intact source page and is omitted from translated prose. */
   frontMatter?: 'authors' | 'affiliation' | 'contact' | 'author-note';
   list?: ListInfo;
@@ -78,7 +82,7 @@ export interface ModelRouting {
   custom: ModelEndpoint;
 }
 /** Top-level endpoint fields remain compatible with projects using a single provider. No keys. */
-export interface Settings extends ModelEndpoint { prompt: string; routing?: ModelRouting }
+export interface Settings extends ModelEndpoint { prompt: string; routing?: ModelRouting;visionBeforeReview?:boolean }
 export const PROMPT_VERSION = '9';
 export const EXTRACTION_VERSION = 9;
 export const canTranslate = (b: Block) => (b.kind === 'body' || b.kind === 'heading') && (!b.originalGraphic || !!b.kindEdited);
@@ -107,6 +111,19 @@ export function validateProject(p: unknown): asserts p is Project {
     if(b.originalGraphic&&(!ids.has(b.originalGraphic.anchorID)&&!a.blocks.some(x=>x.id===b.originalGraphic!.anchorID)||
       !['figure','table','caption','algorithm'].includes(b.originalGraphic.family)))throw new Error('翻译项目含无效的图表区域绑定。');
     if(b.sourceRepairReason!==undefined&&typeof b.sourceRepairReason!=='string')throw new Error('翻译项目含无效的原文修复说明。');
+    if(b.translationVisionKey!==undefined&&!/^[a-f0-9]{16}$/u.test(b.translationVisionKey))throw new Error('图片识别译文绑定无效。');
+    if(b.visionHistory!==undefined&&(!Array.isArray(b.visionHistory)||b.visionHistory.length>3))throw new Error('图片识别历史格式无效。');
+    for(const v of [...(b.visionHistory||[]),...(b.vision?[b.vision]:[])]){
+      if(v.protocol!==1||v.sourceHash!==a.source.hash||v.sourceKey!==a.source.key||v.blockID!==b.id||
+        ![v.cacheKey,v.requestKey,v.inputKey,v.blockKey].every(s=>typeof s==='string'&&/^[a-f0-9]{16}$/u.test(s))||
+        typeof v.sourceText!=='string'||!v.sourceText.trim()||v.sourceText.length>26000||typeof v.active!=='boolean'||
+        !['ready','review'].includes(v.status)||!['body','heading','algorithm','figure','table','caption','math'].includes(v.kind)||
+        typeof v.rawSourceText!=='string'||v.rawSourceText.length>26000||typeof v.manuallyEdited!=='boolean'||
+        typeof v.model!=='string'||v.model.length>200||typeof v.baseURL!=='string'||v.baseURL.length>2000||typeof v.created!=='string'||
+        !Array.isArray(v.issues)||v.issues.length>20||v.issues.some(i=>typeof i!=='string'||i.length>500)||
+        !Array.isArray(v.imageFingerprints)||!v.imageFingerprints.length||v.imageFingerprints.length>6||v.imageFingerprints.some(i=>!/^[a-f0-9]{16}$/u.test(i)))
+        throw new Error('图片识别缓存与原文不匹配或格式无效。');
+    }
     if(b.list&&(typeof b.list.marker!=='string'||!b.list.marker||b.list.marker.length>24||
       !Number.isInteger(b.list.depth)||b.list.depth<0||b.list.depth>16||typeof b.list.ordered!=='boolean'))
       throw new Error('翻译项目含无效的列表结构。');

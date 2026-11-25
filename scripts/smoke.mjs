@@ -18,6 +18,8 @@ try {
   await verifyMathPipeline(moduleFor);
   const {verifyDocumentStructure}=await import('./document-structure-regression.mjs');
   await verifyDocumentStructure(moduleFor);
+  const {verifyVision}=await import('./vision-regression.mjs');
+  await verifyVision(moduleFor);
   const {verifyProtection}=await import('./protection-regression.mjs');
   await verifyProtection(moduleFor);
   const {verifyNetwork}=await import('./network-regression.mjs');
@@ -193,7 +195,7 @@ try {
   abortBounded.abort();await assert.rejects(never,{name:'AbortError'});assert.equal(interrupted,2);
   const {snippetRenderer}=await moduleFor('src/snippets.ts');
   const region={left:0,bottom:0,right:10,top:10};
-  const pngBytes=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC0lEQVR42mP8/x8AAwMCAO+hB1cAAAAASUVORK5CYII=','base64');
+  const pngBytes=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC','base64');
   function mockSnippet(mode){
     const state={renders:0,cancels:0,opens:0,scales:[],canvases:[]};
     const target={closed:false,document:{createElementNS:()=>{const canvas={width:0,height:0,getContext:()=>({}),toBlob:callback=>{if(mode!=='encode-hang')callback(new Blob([pngBytes]));}};state.canvases.push(canvas);return canvas;}}};
@@ -636,6 +638,48 @@ try {
   assert.ok(loadedProject.blocks.slice(5).every(b=>!b.translation));assert.equal(cachedSourceReads,2);
   console.log('PASS selective repair: successful replacement only, failure retention, manual-edit protection and unrelated pending blocks');
 
+  const visionTools=await moduleFor('src/vision.ts');
+  loadedProject.pages=[{viewRect:[0,0,612,792]}];
+  let imageRequests=0,visionCalls=0,afterVisionCalls=0;
+  bridge.visionImages=async(_item,p,id)=>{
+    imageRequests++;const b=p.blocks.find(b=>b.id===id),dataURL='data:image/png;base64,'+Buffer.from(pngBytes).toString('base64');
+    return visionTools.visionCrops(p,b).map(r=>({...r,dataURL,fingerprint:visionTools.visionFingerprint(dataURL)}));
+  };
+  uiContext.fetch=async(_url,options)=>{
+    const body=JSON.parse(options.body),content=body.messages[1].content;
+    if(Array.isArray(content)){
+      visionCalls++;const payload=JSON.parse(content[0].text);
+      return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({block_id:payload.block_id,kind:'body',source_text:payload.approximate_text,uncertain:false,issues:[]})}}]})};
+    }
+    afterVisionCalls++;const payload=JSON.parse(content);
+    return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({translation:'图片识别后译文 '+payload.paragraph})}}]})};
+  };
+  elements.get('block-list').children[1].listeners.get('click')();
+  const preservedTranslation=loadedProject.blocks[1].translation;
+  elements.get('vision-preview').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.equal(visionCalls,0,'local screenshot preview cannot invoke a model');
+  elements.get('vision-recognize').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.equal(visionCalls,1);assert.ok(loadedProject.blocks[1].vision);assert.equal(loadedProject.blocks[1].translation,preservedTranslation);
+  assert.equal(elements.get('vision-panel').open,true);assert.ok(elements.get('vision-images').children.length);
+  const invalidVisionDraft=String.raw`Original text with \(unclosed math`;
+  elements.get('vision-text').value=invalidVisionDraft;elements.get('vision-text').listeners.get('input')();
+  elements.get('vision-save').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.equal(elements.get('vision-text').value,invalidVisionDraft,'invalid OCR edits stay visible for correction');
+  await assert.rejects(uiWindow.paperWeavePrepareSwitch({title:'Other paper'}),/未保存/);
+  elements.get('vision-text').value=loadedProject.blocks[1].vision.sourceText;elements.get('vision-text').listeners.get('input')();
+  elements.get('vision-apply').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.equal(loadedProject.blocks[1].vision.active,true);assert.equal(loadedProject.blocks[1].translation,preservedTranslation);
+  elements.get('retranslate').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.equal(loadedProject.blocks[1].translationVisionKey,loadedProject.blocks[1].vision.cacheKey);
+  assert.ok(loadedProject.blocks[1].translation.startsWith('图片识别后译文'));
+  elements.get('vision-before-review').checked=true;loadedProject.blocks[2].translationNeedsRefresh=true;
+  const callsBeforeBatch=visionCalls;elements.get('repair-review').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.equal(visionCalls,callsBeforeBatch+1,'opt-in review repair calls vision only for unedited flagged paragraphs');
+  assert.equal(loadedProject.blocks[2].translationVisionKey,loadedProject.blocks[2].vision.cacheKey);
+  assert.equal(loadedProject.blocks[0].translation,'人工修订后的译文。');
+  assert.ok(afterVisionCalls>=2&&imageRequests>=3);assert.equal(cachedSourceReads,2,'vision operations do not generate or replace an attachment');
+  console.log('PASS workbench vision: local-only preview, cached candidate persistence, explicit adoption, selected retranslation and opt-in review repair with manual-edit protection');
+
   const {render,LAYOUT}=await moduleFor('src/render.ts');
   const doc=await PDFDocument.create();const page=doc.addPage([612,792]);
   const font=await doc.embedFont(StandardFonts.TimesRoman);
@@ -666,6 +710,12 @@ try {
       mathCase('b10',255,String.raw`人工改写公式 \(R_1\)。`,true),
       {...mathCase('b11',255,'在此使用 R₁。'),mathSpans:[{...mathCase('unused',255,'').mathSpans[0],rects:[[0,40,249,600,267]],fontSize:5}]},
       {...mathCase('b12',315,'在此使用 R₁。'),mathSpans:[{...mathCase('unused',315,'').mathSpans[0],rects:[[0,75,309,88,327],[0,75,279,88,297]],baselines:[315,285],flow:'wrapped'}]}],terms:[],terminologyReady:true,outputs:[],created:'',updated:''};
+  const visionBlock=mathCase('b13',315,String.raw`图片识别译文：使用 \(R_1\)。`);project.blocks.push(visionBlock);
+  const visionURL='data:image/png;base64,'+Buffer.from(pngBytes).toString('base64');
+  visionBlock.vision=await visionTools.recognizeVision({json:async()=>({block_id:'b13',kind:'body',source_text:String.raw`Use \(R_1\) in this paragraph.`,uncertain:false,issues:[]})},
+    {baseURL:'https://api.deepseek.com/v1',model:'deepseek-flash',prompt:''},project,visionBlock,
+    visionTools.visionCrops(project,visionBlock).map(r=>({...r,dataURL:visionURL,fingerprint:visionTools.visionFingerprint(visionURL)})),new AbortController().signal);
+  visionTools.activateVision(project,visionBlock);visionBlock.translationVisionKey=visionBlock.vision.cacheKey;
   const sourceBytes=await doc.save(),fontBytes=new Uint8Array(await readFile('addon/chrome/content/fonts/NotoSerifSC-Regular.ttf'));
   const monoBytes=new Uint8Array(await readFile('addon/chrome/content/fonts/SarasaMonoSC-Regular.ttf'));
   const fontkit=(await import('@pdf-lib/fontkit')).default;
@@ -712,6 +762,8 @@ try {
   assert.ok(!manualMath.mathReview);assert.deepEqual(manualMath.mathExpressions,['R_1'],'explicit authored LaTeX overrides a source formula');
   assert.equal(placements.find(p=>p.blockID==='b11').mathReview,true,'oversized source math falls back safely instead of aborting the entire PDF');
   assert.deepEqual(placements.find(p=>p.blockID==='b12').mathExpressions,['R_{1}'],'source line wraps cannot imitate a fraction in linear mathematical typesetting');
+  assert.deepEqual(placements.find(p=>p.blockID==='b13').mathExpressions,['R_1'],'vision-derived LaTeX renders in an automatic translation without obsolete SDT math bindings');
+  assert.ok(!placements.find(p=>p.blockID==='b13').mathReview);assert.equal(visionBlock.source,'Use R_{1} in this paragraph.','PDF generation retains the canonical source');
   const divider=LAYOUT.margin+(LAYOUT.width-2*LAYOUT.margin)*.6;
   assert.equal((divider-LAYOUT.margin)/(LAYOUT.width-2*LAYOUT.margin),.6);
   for (const line of wrapStyled(styledRuns('AReallyLongTechnicalIdentifier'.repeat(8)),font,font,11,200))

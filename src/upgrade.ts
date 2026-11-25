@@ -29,6 +29,7 @@ export function reconcileExtraction(existing:Project,refreshed:Project):boolean 
       translation:old.translation,edited:old.edited,translatedWith:old.translatedWith,
       translationMathRefs:rebaseMathRefs(old,fresh),
       translationBoldRanges:old.translationBoldRanges};
+    block.vision=old.vision;block.visionHistory=old.visionHistory;block.translationVisionKey=old.translationVisionKey;
     block.translationBoldRanges=translatedBoldRanges(block);
     const inlineMath=block.preserveSource&&/[∈∉=≈≠≤≥×÷±∑√∫⁰-⁹₀-₉\u02B0-\u02FF\u2070-\u209F\u1D2C-\u1D6A]/u.test(block.source);
     const unresolvedBold=!!block.sourceBoldRanges?.length&&!block.translationBoldRanges.length;

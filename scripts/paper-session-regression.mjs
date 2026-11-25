@@ -79,6 +79,8 @@ export async function verifyPaperSessions(moduleFor){
     const before=writes.length;
     await assert.rejects(replayBridge.saveProject(projectFor(linear)),/不匹配/);
     await assert.rejects(replayBridge.sourceBytes(linear,projectFor(linear)),/绑定的 PDF/);
+    await assert.rejects(replayBridge.visionImages(linear,projectFor(linear),'p0-0',new AbortController().signal,()=>{}),/绑定的 PDF/);
+    await assert.rejects(replayBridge.visionImages(replay,projectFor(linear),'p0-0',new AbortController().signal,()=>{}),/不匹配/);
     await assert.rejects(replayBridge.attachPDF(replay,projectFor(linear),new Uint8Array(),true),/不匹配/);
     await assert.rejects(controller.sourceBytes(replay,projectFor(linear)),/不匹配/);
     const otherLibrary=projectFor(replay);otherLibrary.source.libraryID=9;
@@ -89,6 +91,22 @@ export async function verifyPaperSessions(moduleFor){
     await replayBridge.saveProject(projectFor(replay));
     assert.equal(writes.at(-1).path,cachePath(replay),'a late A callback can only save A after B opens');
     assert.equal(writes.at(-1).project.source.key,replay.key);
+    // A late A screenshot remains bound to A after B becomes the visible workbench.
+    const imageFiles=new Map(),imagePaths=[],screenshotItems=[];
+    const png=new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC','base64'));
+    const target={closed:false,document:{createElementNS:()=>({width:0,height:0,getContext:()=>({}),toBlob:cb=>cb(new Blob([png]))})}};
+    const pdf={getPage:async()=>({getViewport:()=>({convertToViewportRectangle:()=>[0,0,40,40]}),render:()=>({promise:Promise.resolve(),cancel(){}})})};
+    const readBefore=IOUtils.read;
+    IOUtils.read=async path=>{if(imageFiles.has(path))return imageFiles.get(path);throw Object.assign(new Error('missing image'),{name:'NotFoundError'});};
+    IOUtils.write=async(path,bytes)=>{imagePaths.push(path);imageFiles.set(path,bytes);};
+    Zotero.getMainWindow=()=>({AbortController});Zotero.Promise={delay:async()=>{}};
+    Zotero.Reader.open=async id=>{screenshotItems.push(id);return{_iframeWindow:{wrappedJSObject:{PDFViewerApplication:{pdfDocument:pdf,pdfViewer:{container:{ownerDocument:{defaultView:target}}}}}}};};
+    Cu.waiveXrays=value=>value;Cu.cloneInto=value=>value;
+    const screenshots=await replayBridge.visionImages(replay,projectFor(replay),'p0-0',new AbortController().signal,()=>{});
+    assert.equal(screenshots.length,1);assert.deepEqual(screenshotItems,[replay.id]);
+    assert.ok(imagePaths.every(path=>path.includes('1-REPLAY01-identical-bytes')));
+    await replayBridge.visionImages(replay,projectFor(replay),'p0-0',new AbortController().signal,()=>{});
+    assert.equal(screenshotItems.length,1,'the source-bound PNG cache avoids reopening a different reader');IOUtils.read=readBefore;
 
     const replayCache=files.get(cachePath(replay));files.set(cachePath(replay),JSON.stringify(projectFor(linear)));
     const checkpoint=writes.length;

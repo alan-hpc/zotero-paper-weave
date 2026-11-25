@@ -9,6 +9,9 @@ import { resolveSettings } from './settings';
 import { applyAuthorMetadata } from './frontMatter';
 import { applyGraphicRegions } from './graphics';
 import { assertAttachment, assertProjectIdentity } from './paperIdentity';
+import { snippetRenderer } from './snippets';
+import { captureVisionImages } from './visionCapture';
+import { visionMatches } from './vision';
 
 let meta: { id: string; version: string; rootURI: string };
 const menus = new Map<any, { nodes: any[]; popup: any; listener: any }>();
@@ -93,7 +96,7 @@ export function settings(): Settings {
   return resolveSettings({
     baseURL: Zotero.Prefs.get(pref + 'baseURL', true) || 'https://api.deepseek.com/v1',
     model: Zotero.Prefs.get(pref + 'model', true) || 'deepseek-flash',
-    prompt: Zotero.Prefs.get(pref + 'prompt', true) || '',routing
+    prompt: Zotero.Prefs.get(pref + 'prompt', true) || '',routing,visionBeforeReview:Zotero.Prefs.get(pref+'visionBeforeReview',true)===true
   });
 }
 function logins(base: string): any[] { return Services.logins.findLogins(origin, null, realm(base)); }
@@ -120,6 +123,7 @@ export async function saveSettings(value: Settings, key: string|Partial<Record<P
   }
   for (const name of ['baseURL','model','prompt'] as const) Zotero.Prefs.set(pref + name, resolved[name].trim(), true);
   Zotero.Prefs.set(pref+'routing',JSON.stringify(routing),true);
+  Zotero.Prefs.set(pref+'visionBeforeReview',resolved.visionBeforeReview===true,true);
 }
 async function ensureDir() { await IOUtils.makeDirectory(directory(), { ignoreExisting: true, permissions: 0o700 }); }
 function projectPath(item: any, hash: string) {
@@ -257,6 +261,9 @@ export async function importProject(window: any, item: any, current: Project) {
     block.translationBoldRanges = edit.translationBoldRanges;
     block.translationMathRefs=rebaseMathRefs(edit,block);
     block.edited = true; block.translatedWith = edit.translatedWith;
+    if(edit.vision&&visionMatches(current,{...block,vision:edit.vision}))block.vision=edit.vision;
+    block.translationVisionKey=edit.translationVisionKey&&edit.translationVisionKey===block.vision?.cacheKey?edit.translationVisionKey:undefined;
+    if(edit.translationVisionKey&&!block.translationVisionKey){block.translationNeedsRefresh=true;block.sourceRepairReason='导入译文来自另一版图片识别，请对照原文复核。';}
   }
   current.terms = incoming.terms;
   current.terminologyReady = incoming.terminologyReady;
@@ -279,6 +286,7 @@ function titleOf(item:any):string {
 function createWorkbenchBridge(item:any,sessionID:string){
   const binding=Object.freeze({id:item.id,libraryID:item.libraryID,key:item.key,parentID:item.parentID,title:titleOf(item),sessionID});
   let loadedHash:string|undefined;
+  let drawVision:Awaited<ReturnType<typeof snippetRenderer>>|undefined;
   const checkItem=(requested:any)=>{assertAttachment(requested,binding);assertAttachment(item,binding);};
   const checkProject=async(project:Project)=>{
     validateProject(project);checkItem(item);
@@ -294,6 +302,19 @@ function createWorkbenchBridge(item:any,sessionID:string){
     },
     saveProject:async(project:Project)=>{await checkProject(project);await saveProject(project);},
     sourceBytes:async(requested:any,project:Project)=>{checkItem(requested);await checkProject(project);return sourceBytes(item,project);},
+    visionImages:async(requested:any,project:Project,blockID:string,signal:AbortSignal,progress:(s:string)=>void)=>{
+      checkItem(requested);await checkProject(project);signal.throwIfAborted();
+      const block=project.blocks.find(b=>b.id===blockID);
+      if(!block)throw new Error('目标段落已不存在。');
+      const folder=PathUtils.join(directory(),'vision',`${binding.libraryID}-${binding.key}-${project.source.hash}`);
+      await IOUtils.makeDirectory(folder,{createAncestors:true,ignoreExisting:true,permissions:0o700});
+      drawVision ||= await snippetRenderer(Zotero,item,Cu,undefined,{maxScale:3,maxPixels:4000000,maxDimension:8192});
+      const images=await captureVisionImages(project,block,drawVision,{
+        read:async key=>{try{return new Uint8Array(await IOUtils.read(PathUtils.join(folder,key+'.png')));}catch(e:any){if(e.name==='NotFoundError')return null;throw e;}},
+        write:async(key,bytes)=>{signal.throwIfAborted();await IOUtils.write(PathUtils.join(folder,key+'.png'),bytes,{permissions:0o600});}
+      },signal,progress);
+      await checkProject(project);signal.throwIfAborted();return images;
+    },
     attachPDF:async(requested:any,project:Project,bytes:Uint8Array,makePreferred:boolean)=>{
       checkItem(requested);await checkProject(project);return attachPDF(item,project,bytes,makePreferred);
     },

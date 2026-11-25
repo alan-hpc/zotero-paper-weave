@@ -13,7 +13,16 @@ The project folder is not automatically synced by PaperWeave.
 
 Clicking terminology extraction sends translatable text in bounded chunks to the configured API.
 Clicking translation sends individual paragraphs, protected term data, and the paper title.
-Custom prompt preferences are included in translation requests. No PDF binary or images are sent.
+Custom prompt preferences are included in translation requests. PDF binaries are not sent.
+By default, terminology and translation send text only. The optional DeepSeek image-recognition
+action sends PNG crops of the selected paragraph to the configured DeepSeek endpoint. The separate,
+default-off "vision before review retranslation" option permits the same image requests for flagged,
+unedited paragraphs when that review action is clicked. Image requests do not fall back to another
+provider. They can incur additional API usage under that provider's policies.
+Local screenshot caches are stored under `paperweave/vision/` with private file permissions. Project
+exports contain recognized English, LaTeX, provenance, edits and recent recognition history, but do
+not embed those PNG files. Source text and previous translations are not replaced by recognition;
+adoption and successful translation are separate steps.
 Detected author metadata is excluded from terminology and translation requests by default and
 remains on the original PDF page. Users can explicitly classify a region as body text to translate it.
 The selected provider controls retention, billing and use of those requests. PaperWeave cannot

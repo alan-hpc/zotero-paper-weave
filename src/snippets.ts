@@ -4,7 +4,7 @@ export interface RegionBox {left:number;bottom:number;right:number;top:number}
 interface Session {pdf:any;targetWindow:any}
 
 /** Offscreen print rendering avoids requestAnimationFrame in inactive Zotero tabs. */
-export async function snippetRenderer(host:any,item:any,utilities:any,setupSignal?:AbortSignal,settings:{timeoutMS?:number}={}) {
+export async function snippetRenderer(host:any,item:any,utilities:any,setupSignal?:AbortSignal,settings:{timeoutMS?:number;maxScale?:number;maxPixels?:number;maxDimension?:number}={}) {
   let session:Session|undefined;
   const controller=():AbortController=>new(host.getMainWindow().AbortController)();
   const timeoutMS=settings.timeoutMS??30000;
@@ -42,7 +42,8 @@ export async function snippetRenderer(host:any,item:any,utilities:any,setupSigna
           const page=utilities.waiveXrays(await pdf.getPage(pageIndex+1));local.signal.throwIfAborted();
           const area=(box.right-box.left)*(box.top-box.bottom);
           if(!Number.isFinite(area)||area<=0)throw new Error('原文区域坐标无效。');
-          const scale=Math.min(attempt?2:4,Math.sqrt(16000000/area));
+          const scale=Math.min(attempt?2:settings.maxScale??4,Math.sqrt((settings.maxPixels??16000000)/area),
+            (settings.maxDimension??Infinity)/Math.max(box.right-box.left,box.top-box.bottom));
           const viewport=utilities.waiveXrays(page.getViewport(utilities.cloneInto({scale},targetWindow)));
           const rect=utilities.waiveXrays(viewport.convertToViewportRectangle(utilities.cloneInto([box.left,box.bottom,box.right,box.top],targetWindow)));
           canvas=targetWindow.document.createElementNS('http://www.w3.org/1999/xhtml','canvas');
@@ -65,6 +66,6 @@ export async function snippetRenderer(host:any,item:any,utilities:any,setupSigna
         cancel();try{if(canvas)canvas.width=canvas.height=0;}catch{}
       }
     }
-    throw new Error(`${label}两次渲染均未完成（${lastError instanceof Error?lastError.message:'阅读器不可用'}）。译文已保存；请重新打开原始 PDF 后点击「保存新版 PDF」，无需重新翻译。`);
+    throw new Error(`${label}两次渲染均未完成（${lastError instanceof Error?lastError.message:'阅读器不可用'}）。已有译文保留；请重新打开原始 PDF 后重试。`);
   };
 }

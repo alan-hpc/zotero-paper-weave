@@ -16,6 +16,17 @@ flowchart LR
 
 ## Boundaries
 
+`visionCapture.ts` uses the controller-bound source PDF and `snippets.ts` offscreen print rendering
+to produce bounded paragraph PNGs, cached privately under a source/rectangle-specific identifier.
+`vision.ts` validates the image/page binding and requests structured English/LaTeX from the configured
+DeepSeek profile. Vision requests use explicit inline images, original detail, bounded retries and
+no cross-provider fallback. Default-off automation is limited to the review-retranslation action.
+Recognition is a separate, versioned source layer: canonical SDT text/geometry stays intact,
+adoption precedes translation, and `translationVisionKey` prevents mixing drafts with different
+recognition versions. The workbench supports local preview, editable OCR candidates, explicit
+adoption/restoration and selective review repair that excludes manual translations. Recognized
+LaTeX reuses the local renderer; no model-proposed coordinates replace trusted source geometry.
+
 The bootstrap registers a chrome UI and a controller. The controller is the only module that
 writes Zotero preferences, reads Login Manager entries, accesses project files, or imports attachments.
 It does not write `zotero.sqlite`. The workbench uses an explicit controller bridge.

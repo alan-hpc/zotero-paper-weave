@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-alpha.40
+
+- Add optional DeepSeek image transcription using the existing enabled DeepSeek endpoint, key and `deepseek-flash` model. Send bounded PNG regions with original image detail, non-thinking structured output, timeouts, cancellation and no cross-provider image fallback.
+- Capture source-bound paragraph regions through Zotero's background print renderer and cache local screenshots privately. Validate page/rectangle/fingerprint ownership, region counts and request size before sending; malformed/cancelled images cannot become saved results.
+- Store recognition as a separate English/LaTeX source layer with explicit adoption/restoration, editable OCR text, raw model text and recent history. Keep canonical source/geometry intact, bind translated text to recognition versions, and retain manual OCR edits across cache reuse.
+- Add local-only image preview and selected-paragraph recognition/adoption in the workbench. A default-off option performs vision before selective review retranslation; skip manual translations, hold uncertain/type/number/length changes for review, and preserve previous results on failure.
+- Validate recognized JSON identity, English transcription, LaTeX, bold structure and source binding. Reuse the existing term/math protection and local PDF renderer, including for vision-derived automatic translations. Update privacy and usage documentation to disclose optional screenshot uploads.
+- Pass complete offline regressions, including multimodal HTTP format, source image caching, editing/adoption, UI review repair, PDF generation, cancellation and cross-paper/fallback guards. No real DeepSeek request or native Zotero installation has been performed for this version.
+
 ## 0.1.0-alpha.39
 
 - Recover prose/math and numbered-reference boundaries from SDT font runs and glyph advances before text normalization; preserve source identities, explicit scripts, URL/code literals and layout hyphens. Avoid inferring mathematical styling from small-cap headings or graphic labels.

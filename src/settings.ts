@@ -36,5 +36,5 @@ export function resolveSettings(value:Settings):Settings&{routing:ModelRouting} 
     deepseek:profile(saved?.deepseek,previous==='deepseek'?legacy:DEEPSEEK_DEFAULT),
     custom:profile(saved?.custom,legacy)
   };
-  return {...routing[primary],prompt:typeof value.prompt==='string'?value.prompt:'',routing};
+  return {...routing[primary],prompt:typeof value.prompt==='string'?value.prompt:'',routing,visionBeforeReview:value.visionBeforeReview===true};
 }

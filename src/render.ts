@@ -9,6 +9,7 @@ import { listInfo, listText } from './lists';
 import { inlineMathText, mathReviewRequired } from './inlineMath';
 import { latexBox, drawLatex } from './latex';
 import { sourceMathLatex } from './mathPresentation';
+import { visionRenderBlock } from './vision';
 
 /** Design B: keep each complete source page on the left, with translation on the right. */
 export const LAYOUT = {
@@ -107,7 +108,8 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
   };
   for(const group of graphics)byAnchor.set(group.anchorID,[...(byAnchor.get(group.anchorID)||[]),group]);
 
-  for (const block of project.blocks) {
+  for (const savedBlock of project.blocks) {
+    const block=visionRenderBlock(savedBlock);
     signal.throwIfAborted();
     for(const group of byAnchor.get(block.id)||[]) {
       const pageIndex=group.sourcePage,crop=source.getPage(pageIndex).getCropBox(),pad=3;

@@ -27,7 +27,9 @@
       <label>DeepSeek Base URL<input id="deepseek-base" type="url" placeholder="https://api.deepseek.com/v1" /></label>
       <label>DeepSeek 模型<input id="deepseek-model" type="text" placeholder="deepseek-flash" /></label>
       <label>DeepSeek API Key<input id="deepseek-key" type="password" autocomplete="off" /></label>
-    </div><div class="row"><button id="delete-deepseek-key" class="subtle">删除 DeepSeek Key</button><span id="deepseek-key-status"></span></div></fieldset>
+    </div><div class="row"><button id="delete-deepseek-key" class="subtle">删除 DeepSeek Key</button><span id="deepseek-key-status"></span></div>
+    <label class="inline"><input id="vision-before-review" type="checkbox" />重译需复核段落前，先用 DeepSeek 图片识别</label>
+    <p class="hint">复用本项地址、Key 和 deepseek-flash。启用后，仅在点击“重译需复核段落”时上传对应段落截图，产生额外 API 用量；不会把图片转发给其他服务。人工修订段落跳过，仍有疑问的识别结果保留待核对。</p></fieldset>
     <fieldset id="custom-profile" class="provider-profile"><legend><span id="custom-priority"></span> 其他兼容 API</legend>
     <div class="row"><label class="inline"><input id="custom-enabled" type="checkbox" />启用其他 API</label><button id="custom-up" class="subtle" aria-label="提高其他 API 优先级">上移</button><button id="custom-down" class="subtle" aria-label="降低其他 API 优先级">下移</button></div><div class="settings-grid">
       <label>API Base URL<input id="base" type="url" placeholder="https://your-service.example/v1" /></label>
@@ -63,6 +65,14 @@
     <section class="editor">
       <div class="row"><strong id="block-title">请选择段落</strong><label class="inline">区域类型 <select id="kind"><option value="body">正文（翻译）</option><option value="heading">标题（翻译）</option><option value="figure">图（原文）</option><option value="caption">图注 / 表注（原文）</option><option value="table">表格（原文）</option><option value="math">公式（原文）</option><option value="code">代码（原文）</option><option value="reference">参考文献（原文）</option><option value="keep">其他（保留英文）</option></select></label></div>
       <label class="area">英文原文<textarea id="source" readonly="readonly" spellcheck="false"></textarea></label>
+      <details id="vision-panel"><summary>DeepSeek 图片识别与原图核对</summary>
+        <p class="hint">“图片识别本段”会上传这一段的原文截图。识别结果单独保存，采用后用于之后的翻译；已有译文不会因识别而直接覆盖。</p>
+        <div class="row"><button id="vision-preview">查看原文截图（本地）</button><button id="vision-recognize">图片识别本段（DeepSeek）</button></div>
+        <p id="vision-status" class="hint"></p><div id="vision-images"></div>
+        <div id="vision-result" hidden="hidden"><label class="area">识别原文（可修订，数学使用 LaTeX）<textarea id="vision-text" spellcheck="false" rows="8"></textarea></label>
+          <div class="row"><button id="vision-save">保存识别修订</button><button id="vision-apply">采用识别结果（已核对）</button><button id="vision-restore">恢复本地识别</button></div>
+        </div>
+      </details>
       <label class="area">中文译文（可以直接修改）<textarea id="translation" spellcheck="false" placeholder="生成译文后可在此修订；原文保留区域无需填写。"></textarea></label>
       <p class="hint">结构明确的行内数学用 LaTeX 离线排版；复杂结构不明时保留完整原文段落并提示复核。独立公式保留原貌。手工修订支持 <code>\(R_1^T\)</code>、<code>\(\frac{x}{y}\)</code>。</p>
       <div class="row"><button id="save-edit">保存修订</button><button id="retranslate">重新翻译本段（覆盖）</button><span id="edit-status"></span></div>
