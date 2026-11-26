@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import {binaryBoundaryFixture} from './binary-fixture.mjs';
 
+const slotEcho=p=>({translation:p.paragraph});
 const temporary=await mkdtemp(join(tmpdir(),'paperweave-smoke-'));
 async function moduleFor(file,suffix='') {
   const output=join(temporary,file.replaceAll('/','-')+suffix+'.mjs');
@@ -27,6 +28,8 @@ try {
   await verifyVision(moduleFor);
   const {verifyProtection}=await import('./protection-regression.mjs');
   await verifyProtection(moduleFor);
+  const {verifyTranslationParts}=await import('./translation-parts-regression.mjs');
+  await verifyTranslationParts(moduleFor);
   const {verifyNetwork}=await import('./network-regression.mjs');
   await verifyNetwork(moduleFor);
   const {verifyFallback}=await import('./fallback-regression.mjs');
@@ -604,12 +607,12 @@ try {
     assert.equal(_url,'https://api.deepseek.com/v1/chat/completions','DeepSeek-only UI never contacts unconfigured Codex');
     const request=JSON.parse(options.body),payload=JSON.parse(request.messages[1].content);
     const reject=payload.paragraph.startsWith('Reject');uiCalls.push(reject?'reject':'okay');
-    return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({translation:reject&&!acceptRejected?'本段故意漏掉保护标记。':payload.paragraph})}}]})};
+    return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify(payload.protectedSlots?(acceptRejected?slotEcho(payload):{invalid:'missing placements'}):{translation:reject&&!acceptRejected?'本段故意漏掉保护标记。':payload.paragraph})}}]})};
   };
   elements.get('start').listeners.get('click')();await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(loadedProject.blocks[1].translation,'','invalid paragraph is still pending');
   assert.ok(loadedProject.blocks.slice(2).every(b=>b.translation),'later paragraphs continue after a protocol rejection');
-  assert.equal(uiCalls.filter(c=>c==='reject').length,3);assert.equal(uiCalls.filter(c=>c==='okay').length,3);
+  assert.equal(uiCalls.filter(c=>c==='reject').length,5);assert.equal(uiCalls.filter(c=>c==='okay').length,3);
   assert.equal(loadedProject.blocks[1].translationFailure.kind,'protection');
   assert.ok(savedRevisions.some(p=>p.blocks[1]?.translationFailure),'failed validation is saved independently of model wording');
   assert.equal(cachedSourceReads,1,'an incomplete project never reaches PDF generation');
@@ -799,9 +802,9 @@ try {
   };
   prepareFailure();const beforeAutoRecovery=cachedSourceReads;
   elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
-  assert.equal(badDrafts,3);assert.equal(recoverImages,1);assert.equal(recoveredDrafts,1);
+  assert.equal(badDrafts,5);assert.equal(recoverImages,1);assert.equal(recoveredDrafts,1);
   assert.equal(cachedSourceReads,beforeAutoRecovery+1,'an initial protection rejection can recover through opt-in vision and reach PDF generation in one primary action');
-  assert.ok(primaryReview.translation.startsWith('恢复译文'));assert.equal(primaryReview.translationFailure,undefined);
+  assert.ok(primaryReview.translation.includes('恢复译文'));assert.equal(primaryReview.translationFailure,undefined);
   assert.equal(loadedProject.blocks[0].translation,completedWording,'completed manual wording is never retried');
   prepareFailure();holdRecognition=true;
   elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
@@ -812,6 +815,17 @@ try {
   assert.deepEqual([badDrafts,recoverImages,recoveredDrafts],beforeHold,'pending recognition review does not repeat paid model attempts');
   assert.match(elements.get('status').textContent,/未重复请求模型/);
   console.log('PASS failed-paragraph recovery: persisted validation state, opt-in vision after rejection, successful continuation, uncertain hold and no repeat requests while awaiting review');
+
+  prepareFailure();holdRecognition=false;
+  elements.get('filter').value='all';elements.get('filter').listeners.get('change')();elements.get('block-list').children[loadedProject.blocks.indexOf(primaryReview)].listeners.get('click')();
+  let selectedRetries=0;
+  uiContext.fetch=async()=>{selectedRetries++;return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({translation:'省略了所有保护项。'})}}]})};};
+  elements.get('retranslate').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.equal(selectedRetries,5);assert.ok(primaryReview.translationFailure.recovery,'selected retranslation persists the same detailed recovery state as batch translation');
+  uiContext.fetch=async(_url,options)=>{selectedRetries++;const p=JSON.parse(JSON.parse(options.body).messages[1].content);assert.ok(p.protectedSlots,'selected retry enters the saved recovery path directly');return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({translation:'继续 '+p.paragraph})}}]})};};
+  elements.get('retranslate').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.equal(selectedRetries,6);assert.equal(primaryReview.translationFailure,undefined);assert.equal(primaryReview.translationRecovery,undefined);
+  assert.equal(loadedProject.blocks[0].translation,completedWording);console.log('PASS selected retranslation: persist precise failure stage, resume without repeating whole-paragraph attempts, clear recovery only on success and retain unrelated manual wording');
 
   const {render,LAYOUT}=await moduleFor('src/render.ts');
   const doc=await PDFDocument.create();const page=doc.addPage([612,792]);

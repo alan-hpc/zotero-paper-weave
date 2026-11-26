@@ -15,6 +15,10 @@ export interface InlineMathSpan extends TextRange {
   reason:string;
 }
 export interface MathReference extends TextRange {sourceIndex:number}
+export interface TranslationRecovery {
+  protocol:1;key:string;total:number;at:string;
+  completed:{index:number;text:string;source?:{model:string;provider?:ProviderName}}[];
+}
 export interface Block {
   id: string;
   source: string;
@@ -51,7 +55,8 @@ export interface Block {
   /** Old saved translation predates inline-style extraction and may have flattened math. */
   translationNeedsRefresh?: boolean;
   /** Bounded validation failure retained across restarts; never a model draft. */
-  translationFailure?:{kind:'protection';missing:number;repeated:number;unknown:number;at:string};
+  translationFailure?:{kind:'protection';missing:number;repeated:number;unknown:number;at:string;recovery?:{part:number;total:number;issues:string[]}};
+  translationRecovery?:TranslationRecovery;
   translatedWith?: { model: string; provider?: ProviderName; promptVersion: string; at: string };
 }
 export interface Term { source: string; reason: string }
@@ -87,7 +92,7 @@ export interface ModelRouting {
 }
 /** Top-level endpoint fields remain compatible with projects using a single provider. No keys. */
 export interface Settings extends ModelEndpoint { prompt: string; routing?: ModelRouting;visionBeforeReview?:boolean }
-export const PROMPT_VERSION = '9';
+export const PROMPT_VERSION = '10';
 export const EXTRACTION_VERSION = 10;
 export const canTranslate = (b: Block) => (b.kind === 'body' || b.kind === 'heading') && (!b.originalGraphic || !!b.kindEdited)&&(!b.proseGroupAnchor||!!b.kindEdited);
 export const now = () => new Date().toISOString();
@@ -126,10 +131,22 @@ export function validateProject(p: unknown): asserts p is Project {
     if(b.translationFailure&&(b.translationFailure.kind!=='protection'||typeof b.translationFailure.at!=='string'||
       ![b.translationFailure.missing,b.translationFailure.repeated,b.translationFailure.unknown].every(n=>Number.isInteger(n)&&n>=0&&n<=10000)))
       throw new Error('翻译项目含无效的保护校验记录。');
+    if(b.translationFailure?.recovery){const r=b.translationFailure.recovery;
+      if(!Number.isInteger(r.part)||!Number.isInteger(r.total)||r.part<1||r.part>r.total||r.total>8||!Array.isArray(r.issues)||r.issues.length>20||r.issues.some(i=>typeof i!=='string'||i.length>300))
+        throw new Error('翻译失败位置记录无效。');
+    }
+    if(b.translationRecovery){
+      const r=b.translationRecovery;
+      if(r.protocol!==1||!/^[a-f0-9]{16}$/u.test(r.key)||!Number.isInteger(r.total)||r.total<1||r.total>8||typeof r.at!=='string'||
+        !Array.isArray(r.completed)||r.completed.length>r.total||new Set(r.completed.map(p=>p.index)).size!==r.completed.length||
+        r.completed.some(p=>!Number.isInteger(p.index)||p.index<0||p.index>=r.total||typeof p.text!=='string'||!p.text.trim()||p.text.length>26000||
+          p.source&&(typeof p.source.model!=='string'||p.source.model.length>400||p.source.provider!==undefined&&!['codex','deepseek','custom'].includes(p.source.provider))))
+        throw new Error('翻译恢复进度格式无效。');
+    }
     if(b.translationVisionKey!==undefined&&!/^[a-f0-9]{16}$/u.test(b.translationVisionKey))throw new Error('图片识别译文绑定无效。');
     if(b.visionHistory!==undefined&&(!Array.isArray(b.visionHistory)||b.visionHistory.length>3))throw new Error('图片识别历史格式无效。');
     for(const v of [...(b.visionHistory||[]),...(b.vision?[b.vision]:[])]){
-      if(v.recognitionVersion!==undefined&&v.recognitionVersion!==2)throw new Error('图片识别流程版本无效。');
+      if(v.recognitionVersion!==undefined&&v.recognitionVersion!==2&&v.recognitionVersion!==3)throw new Error('图片识别流程版本无效。');
       if(v.sourceStyleRestored!==undefined&&typeof v.sourceStyleRestored!=='boolean')throw new Error('数学样式修复记录无效。');
       if(v.protocol!==1||v.sourceHash!==a.source.hash||v.sourceKey!==a.source.key||v.blockID!==b.id||
         ![v.cacheKey,v.requestKey,v.inputKey,v.blockKey].every(s=>typeof s==='string'&&/^[a-f0-9]{16}$/u.test(s))||

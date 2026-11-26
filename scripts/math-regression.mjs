@@ -121,9 +121,9 @@ export async function verifyMathPipeline(moduleFor){
   assert.deepEqual(rebaseMathRefs(block,structuredClone(block)),block.translationMathRefs);
   for(const failure of ['omitted','duplicated']){
     let attempts=0;const saved=structuredClone(block);
-    provider.json=async(_system,payload)=>{attempts++;return{translation:failure==='omitted'?'丢失了全部公式':payload.paragraph+' '+payload.placeholders[0]};};
+    provider.json=async(_system,payload)=>{attempts++;return{translation:failure==='omitted'?'丢失了全部公式':payload.paragraph+' '+(payload.protectedSlots?.[0].reference||payload.placeholders[0])};};
     await assert.rejects(provider.translate(block,project),/公式或技术术语标记/);
-    assert.equal(attempts,3,'invalid formulas are retried before rejecting');
+    assert.equal(attempts,5,'invalid formulas are retried through bounded recovery before rejecting');
     assert.deepEqual(block,saved,'a rejected response never overwrites saved translations or revisions');
   }
 

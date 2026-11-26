@@ -208,3 +208,7 @@ other host versions need broader validation before a stable release. The develop
 workflow runs type checking, offline smoke checks and packaging. The smoke suite covers bootstrap
 globals, preference lifecycle and layout geometry/pagination/manual revisions. It does not replace
 real Zotero installation, SDT, credential and model testing.
+
+## Translation recovery
+
+Failed protections can use bounded complete-sentence requests with short references and their readable source values. A paragraph retains its immutable source and old wording until all groups and the global registry pass. `translationRecovery` stores source/configuration-bound validated groups through the workbench save queue. `recordTranslation` clears the checkpoint only on final success; manual edits clear it explicitly. Cached groups are revalidated before reuse. See [the recovery contract](TRANSLATION_RECOVERY.zh-CN.md).

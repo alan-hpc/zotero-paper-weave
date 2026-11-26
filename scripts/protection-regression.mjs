@@ -66,9 +66,9 @@ export async function verifyProtection(moduleFor){
   for(const [name,transform]of Object.entries(variants)){
     const saved={...single,translation:'人工修改的旧译文。',edited:true};let calls=0;
     const client=new Provider(settings,'',new AbortController().signal);const before=structuredClone(saved);
-    client.json=async(_system,p)=>{calls++;if(calls>1){assert.ok(p.markerRepair);assert.ok(p.markerRepair.missing.length+p.markerRepair.repeated.length+p.markerRepair.unknown.length>0);}return{translation:transform(p)};};
+    client.json=async(_system,p)=>{calls++;if(p.protectedSlots)return{invalid:'missing placements'};if(calls>1){assert.ok(p.markerRepair);assert.ok(p.markerRepair.missing.length+p.markerRepair.repeated.length+p.markerRepair.unknown.length>0);}return{translation:transform(p)};};
     await assert.rejects(client.translate(saved,project),error=>error.code==='PW_PROTECTION_INVALID'&&error.blockID==='b1'&&/本段未保存/.test(error.message),name);
-    assert.equal(calls,3,name+' has bounded repair retries');assert.deepEqual(saved,before,name+' preserves existing translations and edits');
+    assert.equal(calls,5,name+' has bounded legacy and structured repair retries');assert.deepEqual(saved,before,name+' preserves existing translations and edits');
   }
   const repaired=await translate(single,(p,attempt)=>attempt===1?p.paragraph+' PWLOCKTERM9999QZ':p.paragraph);
   assert.equal(repaired.calls,2);assert.equal(repaired.result.text,single.source,'repairable response errors resume within the paragraph');

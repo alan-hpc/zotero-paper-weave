@@ -132,11 +132,23 @@ async function provider(signal: AbortSignal) {
     } else requestStates.delete(requestId);
     tickProgress();
   },{name:first.name,fallbacks:routing.autoFallback?remaining:[],
+    onRecoveryProgress:async(id,recovery)=>{const b=project!.blocks.find(b=>b.id===id);if(!b)throw new Error('恢复段落已不存在。');b.translationRecovery=recovery;revision++;dirty=true;await save();},
     onFallback:(from,to)=>{taskProvider=to;$('provider-status').textContent=`${from?PROVIDER_LABELS[from]:'前一服务'}额度耗尽，已按优先级切换到 ${PROVIDER_LABELS[to]}；本次任务后续请求使用 ${PROVIDER_LABELS[to]}。`;}
   }), settings };
 }
 const labels: Record<Kind,string> = { body:'正文', heading:'标题', figure:'图', caption:'图注 / 表注', table:'表格', math:'公式', code:'代码', reference:'参考文献', keep:'保留英文' };
 const needsReview=visionNeedsReview;
+function translationFailureText(b:Block){
+  const f=b.translationFailure!,r=f.recovery,progress=b.translationRecovery;
+  const detail=r?`第 ${r.part}/${r.total} 句组：${r.issues.join('；')}。`:`缺少 ${f.missing}、重复 ${f.repeated}、未知 ${f.unknown}。`;
+  return `译文保护校验未通过，${detail}${progress?`已保存 ${progress.completed.length}/${progress.total} 句组，可继续剩余部分。`:''}旧译文保留。`+
+    (b.vision?.active&&project&&visionMatches(project,b)?'图片识别已采用，无需重复识别；可继续翻译或修订本段。':'可用图片识别恢复或手动修订。');
+}
+async function rememberProtectionFailure(block:Block,error:TranslationProtectionError){
+  block.translationFailure={kind:'protection',missing:error.audit.missing.length,repeated:error.audit.repeated.length,unknown:error.audit.unknown.length,at:new Date().toISOString(),
+    ...(error.recovery?{recovery:{...error.recovery,issues:error.recovery.issues.slice(0,20).map(s=>s.slice(0,300))}}:{})};
+  revision++;dirty=true;await save();
+}
 function updateControls() {
   const locked=busy||switching;
   document.body.classList.toggle('busy', locked);
@@ -172,7 +184,7 @@ function list() {
     button.classList.toggle('current', b.id === selected?.id);
     const meta = document.createElement('span'); meta.className = 'block-meta';
     const state=b.translationFailure?'保护校验待恢复':needsReview(b)?'格式需复核':b.edited?'已修订':b.translation?'已翻译':'待翻译';
-    meta.textContent = `${b.id} · p.${b.rects[0]?.[0]+1} · ${b.proseGroupAnchor?'已合并到 '+b.proseGroupAnchor:b.proseGroup?'组合正文':b.originalGraphic?(b.originalGraphic.family==='algorithm'?'算法区域（整组保留）':'图表区域（整组保留）'):b.frontMatter&&b.kind==='keep'?'作者信息（仅左侧）':labels[b.kind]} · ${canTranslate(b) ? state : b.proseGroupAnchor?'旧译文保留':'原文'}${b.vision?.active?' · 图片识别已采用':''}`;
+    meta.textContent = `${b.id} · p.${b.rects[0]?.[0]+1} · ${b.proseGroupAnchor?'已合并到 '+b.proseGroupAnchor:b.proseGroup?'组合正文':b.originalGraphic?(b.originalGraphic.family==='algorithm'?'算法区域（整组保留）':'图表区域（整组保留）'):b.frontMatter&&b.kind==='keep'?'作者信息（仅左侧）':labels[b.kind]} · ${canTranslate(b) ? state : b.proseGroupAnchor?'旧译文保留':'原文'}${b.vision?.active?' · 图片识别已采用':''}${b.translationRecovery?' · 恢复进度 '+b.translationRecovery.completed.length+'/'+b.translationRecovery.total:''}`;
     const excerpt = document.createElement('span'); excerpt.textContent = b.source.slice(0,90) || '[PDF 图形区域]';
     button.append(meta, excerpt); button.addEventListener('click', () => select(b)); root.appendChild(button);
   }
@@ -184,7 +196,7 @@ function select(block: Block) {
   area('translation').value = block.translation;
   ($<HTMLSelectElement>('kind')).value = block.kind;
   showVision(block);
-  $('edit-status').textContent = block.originalGraphic?'本段已包含在完整原文区域中，不会重复翻译或输出；旧译文仍保留。可手动改为正文以单独翻译。':block.translationFailure?`保护标记校验未通过：缺少 ${block.translationFailure.missing}、重复 ${block.translationFailure.repeated}、未知 ${block.translationFailure.unknown}。旧译文保留，可用图片识别恢复或手动修订。`:block.sourceRepairReason|| (block.frontMatter&&block.kind==='keep'?'作者信息仅保留在左侧原页，不参与翻译；已有译文缓存保留。':needsReview(block) ? '本段公式或格式需复核。无法确认公式对应时，PDF 保留原文；可用 LaTeX 修订，或重新翻译本段。' : block.edited ? '人工修订会保留' : '');
+  $('edit-status').textContent = block.originalGraphic?'本段已包含在完整原文区域中，不会重复翻译或输出；旧译文仍保留。可手动改为正文以单独翻译。':block.translationFailure?translationFailureText(block):block.sourceRepairReason|| (block.frontMatter&&block.kind==='keep'?'作者信息仅保留在左侧原页，不参与翻译；已有译文缓存保留。':needsReview(block) ? '本段公式或格式需复核。无法确认公式对应时，PDF 保留原文；可用 LaTeX 修订，或重新翻译本段。' : block.edited ? '人工修订会保留' : '');
   list(); updateControls();
 }
 function showVision(block:Block){
@@ -318,9 +330,7 @@ async function translateRemaining(client: Provider, settings: Settings, signal: 
       } catch(error:any) {
         if(error instanceof TranslationProtectionError){
           paragraphFailures.set(block.id,error.message);
-          block.translationFailure={kind:'protection',missing:error.audit.missing.length,repeated:error.audit.repeated.length,unknown:error.audit.unknown.length,at:new Date().toISOString()};
-          revision++;dirty=true;
-          try{await save();}catch(saveError){if(!failed){failed=true;firstError=saveError;}}
+          try{await rememberProtectionFailure(block,error);}catch(saveError){if(!failed){failed=true;firstError=saveError;}}
         }
         else {
           if(!failed){failed=true;firstError=error;}
@@ -333,7 +343,10 @@ async function translateRemaining(client: Provider, settings: Settings, signal: 
   };
   await Promise.all(Array.from({length:concurrency},()=>worker()));
   if(failed)throw firstError;
-  if(paragraphFailures.size)throw Object.assign(new Error(`已保存 ${completed}/${total} 段；${[...paragraphFailures.keys()].join('、')} 共 ${paragraphFailures.size} 段保护标记校验未通过，译文未覆盖。其他段落已处理完；可对失败段使用图片识别或修订后继续。本次未生成 PDF。`),{code:'PW_PROTECTION_BATCH',blockIDs:[...paragraphFailures.keys()]});
+  if(paragraphFailures.size){
+    const recognized=[...paragraphFailures.keys()].some(id=>{const b=project!.blocks.find(b=>b.id===id)!;return b.vision?.active&&visionMatches(project!,b);});
+    throw Object.assign(new Error(`已保存 ${completed}/${total} 段；${[...paragraphFailures.keys()].join('、')} 共 ${paragraphFailures.size} 段保护标记校验未通过，译文未覆盖。其他段落已处理完；${recognized?'已采用图片识别的段落是译文校验失败，无需重复识别；可重新翻译或修订。':'可对失败段使用图片识别或修订后继续。'}本次未生成 PDF。`),{code:'PW_PROTECTION_BATCH',blockIDs:[...paragraphFailures.keys()]});
+  }
   if(pending.length===0)updateProgress();
   else phase('逐段翻译',completed,total,'段');
   if (pending.length) {
@@ -357,7 +370,7 @@ async function repairReview(signal:AbortSignal,onlyIDs?:Set<string>){
     for(const [index,b]of candidates.entries()){
       phase('图片识别需复核段落',index,candidates.length,'段');
       try{
-        if(b.vision?.status==='review'&&b.vision.recognitionVersion===2&&!b.vision.active&&visionMatches(project!,b)){unresolved.push(b.id);continue;}
+        if(b.vision?.status==='review'&&b.vision.recognitionVersion===3&&!b.vision.active&&visionMatches(project!,b)){unresolved.push(b.id);continue;}
         // Explicitly adopted OCR is authoritative even if the model originally
         // reported uncertainty. A retry must not undo the user's review.
         if(b.vision?.active&&visionMatches(project!,b)){eligible.add(b.id);continue;}
@@ -431,12 +444,13 @@ bind('vision-restore',()=>{const b=selected;return run(async()=>{
   revision++;dirty=true;await save();if(selected?.id===b.id)select(b);status(`${b.id} 已恢复本地提取的原文。图片识别记录和已有译文均保留。`);
 });});
 bind('retranslate', () => run(async signal => {
-  if (!selected || !canTranslate(selected)) return;
+  const block=selected;if (!block || !canTranslate(block)) return;
   const { client, settings } = await provider(signal);
-  status(`正在重新翻译 ${selected.id}…`);
+  status(`正在重新翻译 ${block.id}…`);
   phase('重新翻译所选段落',0,1,'段');
-  recordTranslation(selected, await client.translate(selected,project!),settings);
-  await save(); status('本段已重新翻译并保存。');
+  try{recordTranslation(block, await client.translate(block,project!),settings);}
+  catch(error){if(error instanceof TranslationProtectionError)await rememberProtectionFailure(block,error);throw error;}
+  await save(); status(`${block.id} 已重新翻译并保存。`);
 }));
 async function generatePDF(signal: AbortSignal) {
   const mathReview=new Set<string>();
@@ -463,7 +477,7 @@ async function generatePDF(signal: AbortSignal) {
 bind('prefer-original', () => run(async () => { await host.preferOriginal(host.item); status('这篇论文已改为优先打开原文。'); }));
 bind('start', () => run(async signal => {
   const awaitingReview=input('vision-before-review').checked&&project!.blocks.find(b=>canTranslate(b)&&b.translationFailure&&
-    b.vision?.status==='review'&&b.vision.recognitionVersion===2&&!b.vision.active&&visionMatches(project!,b));
+    b.vision?.status==='review'&&b.vision.recognitionVersion===3&&!b.vision.active&&visionMatches(project!,b));
   if(awaitingReview){
     ($('filter') as HTMLSelectElement).value='math-review';list();select(awaitingReview);($('vision-panel') as HTMLDetailsElement).open=true;
     status('失败段已有待核对的图片识别结果，本次未重复请求模型。请先核对并采用，再继续生成 PDF。');return;
@@ -472,8 +486,12 @@ bind('start', () => run(async signal => {
     const { client, settings } = await provider(signal);
     try{await translateRemaining(client, settings, signal);}catch(error:any){
       if(error?.code!=='PW_PROTECTION_BATCH'||!input('vision-before-review').checked)throw error;
+      // The failed translation already used adopted OCR. Repeating the same
+      // recognition/translation cycle cannot repair a new source boundary.
+      const repairIDs=error.blockIDs.filter((id:string)=>{const b=project!.blocks.find(b=>b.id===id)!;return !b.vision?.active||!visionMatches(project!,b);});
+      if(!repairIDs.length)throw error;
       status(`已保存其他段落，正在为 ${error.blockIDs.join('、')} 恢复保护内容…`);
-      await repairReview(signal,new Set(error.blockIDs));
+      await repairReview(signal,new Set(repairIDs));
       if(project!.blocks.some(b=>canTranslate(b)&&!b.translation.trim())){
         const unresolved=project!.blocks.find(b=>canTranslate(b)&&!b.translation.trim());
         if(unresolved){($('filter') as HTMLSelectElement).value='math-review';list();select(unresolved);($('vision-panel') as HTMLDetailsElement).open=true;}
@@ -500,7 +518,7 @@ $('translation').addEventListener('input', () => { if (selected) {
   const updated=area('translation').value;
   selected.translationBoldRanges=remapTextRanges(selected.translation,updated,selected.translationBoldRanges);
   selected.translationMathRefs=remapTextRanges(selected.translation,updated,selected.translationMathRefs);
-  selected.translation=updated;selected.edited=true;selected.translationNeedsRefresh=false;delete selected.sourceRepairReason;delete selected.translationFailure;changed();
+  selected.translation=updated;selected.edited=true;selected.translationNeedsRefresh=false;delete selected.sourceRepairReason;delete selected.translationFailure;delete selected.translationRecovery;changed();
   selected.translationVisionKey=visionTranslationKey(selected);
 } });
 $('vision-text').addEventListener('input',()=>{if(selected?.vision){

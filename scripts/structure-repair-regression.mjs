@@ -62,7 +62,7 @@ export async function verifyStructureRepair(moduleFor){
     return{block_id:'a',kind:'body',source_text:recognized,uncertain:false,issues:[]};
   }},{baseURL:'https://example.test/v1',model:'vision',prompt:''},project,anchor,
     vision.visionCrops(project,anchor).map(r=>({...r,dataURL:png,fingerprint:vision.visionFingerprint(png)})),new AbortController().signal);
-  assert.equal(anchor.vision.status,'ready');assert.equal(anchor.vision.recognitionVersion,2);
+  assert.equal(anchor.vision.status,'ready');assert.equal(anchor.vision.recognitionVersion,3);
   vision.activateVision(project,anchor);recordTranslation(anchor,{text:'完整段落译文 '+recognized,boldRanges:[]},{baseURL:'https://example.test',model:'vision',prompt:''});
   assert.equal(vision.visionNeedsReview(anchor),false);assert.equal(vision.visionRenderBlock(anchor).source,recognized);validateProject(project);
   anchor.edited=true;anchor.vision.manuallyEdited=true;

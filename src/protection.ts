@@ -17,8 +17,9 @@ export interface RestoredText {text:string;boldRanges:TextRange[];mathRefs?:Math
 /** A paragraph-scoped, flat registry. Inserted source values are never scanned again. */
 export class ProtectionRegistry {
   private entries:Entry[]=[];
+  private readOnly=false;
   readonly prefix:string;
-  constructor(source:string,scope:string){
+  constructor(private source:string,private scope:string){
     let hash=0xcbf29ce484222325n;
     for(const c of scope+'\0'+source)hash=BigInt.asUintN(64,(hash^BigInt(c.codePointAt(0)!))*0x100000001b3n);
     const compact=source.normalize('NFKC').replace(/[\s\p{P}\p{S}\p{Cf}]/gu,'').toUpperCase();
@@ -27,8 +28,20 @@ export class ProtectionRegistry {
     this.prefix=prefix;
   }
   get tokens(){return this.entries.map(entry=>entry.token);}
+  value(token:string):string {
+    const entry=this.entries.find(e=>e.token===token);if(!entry)throw new Error('保护项不属于当前段落。');return entry.text;
+  }
+  /** A recovery request may use only its own original markers, never another sentence's. */
+  subset(tokens:string[]):ProtectionRegistry {
+    const selected=new Set(tokens);
+    if(selected.size!==tokens.length||tokens.some(t=>!this.tokens.includes(t)))throw new Error('保护子集不属于当前段落。');
+    const view=new ProtectionRegistry(this.source,this.scope);
+    view.entries=this.entries.filter(e=>selected.has(e.token));view.readOnly=true;
+    return view;
+  }
   private exactPattern(){return new RegExp(escape(this.prefix)+String.raw`\d+QZ`,'gu');}
   lock(text:string,mathRefs:MathReference[]=[]):string {
+    if(this.readOnly)throw new Error('保护子集不能增加标记。');
     if(!text)throw new Error('保护内容不能为空。');
     if(text.includes(this.prefix))throw new Error('保护表不能嵌套。');
     const token=this.prefix+String(this.entries.length).padStart(4,'0')+'QZ';

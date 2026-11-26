@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-alpha.45
+
+- Recover paragraph protection failures with bounded, complete-sentence requests using short references and readable source bindings. Preserve natural Chinese reordering, canonical formulas, glossary values and bold/math offsets; validate both each group and the assembled paragraph.
+- Recover narrow line-end OCR crops using same-column source geometry. Version 3 recognition distinguishes visible page-edge fragments and prose figure/algorithm references; retry old unresolved candidates while retaining adopted/manual layers.
+- Save validated recovery groups in a separate source/configuration-bound checkpoint. Resume after cancellation, failure or restart without replacing old wording until the whole paragraph succeeds.
+- Distinguish adopted OCR from translation failures, retain specific failed-group diagnostics and avoid repeating the same OCR/translation cycle. Keep strict PDF gating and service routing unchanged.
+- Add protection, recovery, restart, source-isolation and cancellation regressions. Real gpt-6-luna checks on isolated ReplaySSM b47/b96 copies retained all 28/37 source protections with natural sentence translations; native Zotero acceptance remains pending.
+
 ## 0.1.0-alpha.44
 
 - Repair notation tables split into ordinary paragraph rows. Extend a trusted Symbol/Description core through adjacent table rows and section labels, retaining full table width and stopping at other numbered tables, narrative text or explicit manual classification.

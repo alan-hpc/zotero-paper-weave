@@ -12,13 +12,13 @@
 
 ## 安装与升级
 
-当前源码版本为 **[0.1.0-alpha.44](docs/releases/v0.1.0-alpha.44.md)**，包含段落边界、符号表归组、公式样式和裁切修复。该版已通过自动检查，Zotero 内验证仍在进行。
+当前源码版本为 **[0.1.0-alpha.45](docs/releases/v0.1.0-alpha.45.md)**，包含翻译保护、来源绑定恢复、句组进度保存，以及段落和公式结构修复。该版已通过自动检查，Zotero 内验证仍在进行。
 
-1. 打开 [alpha.44 已通过的构建](https://github.com/alan-hpc/zotero-paper-weave/actions/runs/45755689371)，在 **Artifacts** 中下载 `paperweave-build` 并解压。下载构建产物需要登录 GitHub；也可按下文从源码构建。
+1. 打开 [GitHub 构建列表](https://github.com/alan-hpc/zotero-paper-weave/actions/workflows/build.yml)，选择 main 分支最新通过的构建，在 **Artifacts** 中下载 `paperweave-build` 并解压。下载构建产物需要登录 GitHub；也可按下文从源码构建。
 2. 在 Zotero 中打开「**工具 → 插件 → 齿轮 → 从文件安装插件**」，选择解压后的 `.xpi`。
 3. 重启 Zotero。升级后原有模型配置、译文和人工修订继续保留。
 
-[Releases](https://github.com/alan-hpc/zotero-paper-weave/releases) 当前最新公开安装包为 **alpha.37**，尚未发布 alpha.44 Release。本页使用说明以 alpha.44 为准。Alpha 版本需手动安装升级。
+[Releases](https://github.com/alan-hpc/zotero-paper-weave/releases) 当前最新公开安装包为 **alpha.37**，尚未发布 alpha.45 Release。本页使用说明以 alpha.45 为准。Alpha 版本需手动安装升级。
 
 ## 第一次翻译
 
@@ -42,7 +42,7 @@
 
 - **修订**：右键打开原 PDF 或生成的 PDF，选择段落，修改「中文译文」，点击「**保存修订**」。
 - **更新阅读副本**：再次点击「**翻译并生成 PDF**」。已有译文复用缓存，每次生成新附件；人工修订保留。
-- **失败后继续**：再次点击主按钮，复用已保存进度并继续未完成部分；需要复核的段落按下文处理，不需要整篇重译。
+- **失败后继续**：再次点击主按钮，复用已保存的段落与恢复句组，继续未完成部分。已采用识别的译文保护错误会进入来源绑定恢复，具体机制见 [完整恢复方案](docs/TRANSLATION_RECOVERY.zh-CN.md)。需要核对原文时按下文处理。
 - **修改术语**：在「**本文术语表**」增删需要保留英文的词，再按需重新翻译相关段落。修改词表或切换模型不会自动重译已有译文。
 - **重译一段**：「**重新翻译本段（覆盖）**」会替换该段译文，包括人工修订，请按需使用。
 

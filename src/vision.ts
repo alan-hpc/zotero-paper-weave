@@ -13,7 +13,7 @@ export interface VisionRecord {
   baseURL:string;model:string;created:string;sourceText:string;
   kind:'body'|'heading'|'algorithm'|'figure'|'table'|'caption'|'math';
   status:'ready'|'review';issues:string[];active:boolean;imageFingerprints:string[];rawSourceText:string;manuallyEdited:boolean;
-  recognitionVersion?:2;
+  recognitionVersion?:2|3;
   sourceStyleRestored?:boolean;
 }
 /** A deterministic cache identifier, not an authentication or security digest. */
@@ -28,7 +28,7 @@ export function visionMatches(project:Project,b:Block):boolean {
   const v=b.vision;return !!v&&v.protocol===VISION_PROTOCOL&&v.sourceKey===project.source.key&&v.sourceHash===project.source.hash&&v.blockID===b.id&&v.inputKey===visionInputKey(project,b);
 }
 export const visionNeedsReview=(b:Block)=>!b.originalGraphic&&!b.proseGroupAnchor&&!b.frontMatter&&(b.kind==='body'||b.kind==='heading')&&
-  (!!b.translationFailure||!!b.translationNeedsRefresh||!!b.sourceRepairReason||inlineMathPlan(visionRenderBlock(b)).needsReview||visionRenderBlock(b).mathSpans?.some(s=>s.representation==='review')===true);
+  (!!b.translationFailure||!!b.translationRecovery||!!b.translationNeedsRefresh||!!b.sourceRepairReason||inlineMathPlan(visionRenderBlock(b)).needsReview||visionRenderBlock(b).mathSpans?.some(s=>s.representation==='review')===true);
 
 export function pngDataURL(bytes:Uint8Array):string {
   if(bytes.length<33||bytes.length>6*1024*1024||![137,80,78,71,13,10,26,10].every((v,i)=>bytes[i]===v)||
@@ -51,7 +51,13 @@ export function visionCrops(project:Project,block:Block):{pageIndex:number;box:V
   return block.rects.map((r:Rect)=>{
     const view=project.pages[r[0]]?.viewRect;
     if(!view||view.length!==4)throw new Error('原文页框无效，无法截取图片。');
-    const box={left:Math.max(view[0],r[1]-2),bottom:Math.max(view[1],r[2]-2),right:Math.min(view[2],r[3]+2),top:Math.min(view[3],r[4]+2)};
+    const width=r[3]-r[1];
+    const peers=block.kind==='body'&&!block.kindEdited?project.blocks.filter(b=>b.kind==='body'&&!b.frontMatter&&!b.originalGraphic&&!b.proseGroupAnchor)
+      .flatMap(b=>b.proseGroup?.rects||b.rects).filter(p=>p[0]===r[0]&&Math.abs(p[1]-r[1])<=3&&p[3]-p[1]>=width*.8&&p[3]-p[1]<=width*1.12&&p[3]-r[3]<=Math.min(24,width*.08)):[];
+    // Justified SDT boxes can stop before the last glyph. Recover only a narrow,
+    // same-column envelope supported by existing source geometry.
+    const right=peers.length>=2?Math.max(r[3],...peers.map(p=>p[3])):r[3];
+    const box={left:Math.max(view[0],r[1]-2),bottom:Math.max(view[1],r[2]-2),right:Math.min(view[2],right+2),top:Math.min(view[3],r[4]+2)};
     if(!(box.right>box.left&&box.top>box.bottom))throw new Error('原文截图范围无效。');
     return {pageIndex:r[0],box};
   });
@@ -77,6 +83,8 @@ Read the attached image regions in their given order. Transcribe ONLY the origin
 Use complete inline LaTeX \\( ... \\) or display LaTeX \\[ ... \\] for ALL mathematical expressions, preserving scripts, fractions, matrices, accents, blackboard alphabets and equation numbers. Keep ordinary English prose outside math. Use **...** for original bold prose, not math.
 Preserve mathematical font weight: use \\mathbf for bold Latin matrix/vector symbols and \\boldsymbol for bold Greek symbols, including symbols carrying accents. Distinguish a tilde, hat and bar from their visible shape; use the high-resolution image rather than the approximate text's flattened spelling.
 If a symbol or boundary cannot be read reliably set uncertain=true and list the issue. Never guess to produce a fluent result. Do not reconstruct graphical content as prose.
+The supplied source region may start or end mid-sentence at a page boundary or next to a displayed equation. Transcribe the visible fragment exactly; a linguistically unfinished sentence is not itself visual uncertainty. Do not invent the continuation.
+A prose paragraph referring to Figure 13, Table 2 or Algorithm 4 is still body text. Classify it as figure/table/algorithm only when the image itself shows that non-prose content, not merely because its prose cites a label.
 Return JSON: {"block_id":"requested ID","kind":"body|heading|algorithm|figure|table|caption|math","source_text":"original English with LaTeX","uncertain":false,"issues":[]}.`;
 export async function recognizeVision(client:Pick<Provider,'json'>,settings:Settings,project:Project,block:Block,images:VisionImage[],signal:AbortSignal):Promise<VisionRecord> {
   signal.throwIfAborted();
@@ -86,9 +94,9 @@ export async function recognizeVision(client:Pick<Provider,'json'>,settings:Sett
   if(images.length!==expected.length||images.some((image,index)=>image.fingerprint!==visionFingerprint(image.dataURL)||
     image.pageIndex!==expected[index].pageIndex||JSON.stringify(image.box)!==JSON.stringify(expected[index].box)))throw new Error('原文截图与目标段落绑定不一致。');
   const styles=mathStyleHints(project,block);
-  const inputKey=visionInputKey(project,block),requestKey=visionFingerprint(JSON.stringify([inputKey,settings.baseURL,settings.model,images.map(i=>i.fingerprint),...(styles.length?[styles]:[])]));
+  const inputKey=visionInputKey(project,block),requestKey=visionFingerprint(JSON.stringify(['recognition-3',inputKey,settings.baseURL,settings.model,images.map(i=>i.fingerprint),images.map(i=>i.box),...(styles.length?[styles]:[])]));
   if(visionMatches(project,block)&&(block.vision!.manuallyEdited||block.vision!.requestKey===requestKey&&
-    (block.vision!.status!=='review'||block.vision!.recognitionVersion===2)))return block.vision!;
+    (block.vision!.status!=='review'||block.vision!.recognitionVersion===3)))return block.vision!;
   const target=proseSourceBlock(block);
   const result=await client.json(SYSTEM,{task:'Transcribe the original English region and its mathematical structure.',block_id:block.id,
     approximate_text:target.source,regions:images.map(i=>({source_page:i.pageIndex+1,box:i.box})),paper_title:project.source.title,
@@ -112,7 +120,7 @@ export async function recognizeVision(client:Pick<Provider,'json'>,settings:Sett
   const sourceText=styled.text.trim();
   return {protocol:VISION_PROTOCOL,cacheKey:visionFingerprint(requestKey+'|'+sourceText),requestKey,inputKey,blockKey:blockKey(block),sourceHash:project.source.hash,sourceKey:project.source.key,blockID:block.id,
     baseURL:settings.baseURL,model:settings.model,created:new Date().toISOString(),sourceText,kind:result.kind,
-    status:issues.length?'review':'ready',issues,active:false,imageFingerprints:images.map(i=>i.fingerprint),rawSourceText:result.source_text.trim(),manuallyEdited:false,recognitionVersion:2,...(styled.restored?{sourceStyleRestored:true}:{})};
+    status:issues.length?'review':'ready',issues,active:false,imageFingerprints:images.map(i=>i.fingerprint),rawSourceText:result.source_text.trim(),manuallyEdited:false,recognitionVersion:3,...(styled.restored?{sourceStyleRestored:true}:{})};
   }catch(error){throw Object.assign(new Error(error instanceof Error?error.message:'图片识别结果无效。'),{code:'PW_VISION_INVALID'});}
 }
 export function editVisionText(project:Project,b:Block,text:string):void {
