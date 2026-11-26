@@ -188,9 +188,9 @@ export async function sourceBytes(item: any, project: Project) {
   return copyBytes(await IOUtils.read(await item.getFilePathAsync()),(value,target)=>Cu.cloneInto(value,target));
 }
 export async function fontBytes() {
-  return readAsset(Zotero.getMainWindow().XMLHttpRequest, meta.rootURI + 'chrome/content/fonts/NotoSerifSC-Regular.ttf',(value,target)=>Cu.cloneInto(value,target));
+  return readAsset(XMLHttpRequest, meta.rootURI + 'chrome/content/fonts/NotoSerifSC-Regular.ttf',(value,target)=>Cu.cloneInto(value,target));
 }
-export async function monoFontBytes() { return readAsset(Zotero.getMainWindow().XMLHttpRequest, meta.rootURI + 'chrome/content/fonts/SarasaMonoSC-Regular.ttf',(value,target)=>Cu.cloneInto(value,target)); }
+export async function monoFontBytes() { return readAsset(XMLHttpRequest, meta.rootURI + 'chrome/content/fonts/SarasaMonoSC-Regular.ttf',(value,target)=>Cu.cloneInto(value,target)); }
 export function preferBilingual() { return Zotero.Prefs.get(pref + 'preferBilingual', true) !== false; }
 export async function preferOriginal(item: any) {
   if (!item.parentID) throw new Error('独立 PDF 没有父论文条目；请直接打开原文附件。');
@@ -334,10 +334,12 @@ function createWorkbenchBridge(item:any,sessionID:string){
 /** Capture the entry-point target now, before any asynchronous window transition. */
 function captureOpenRequest(window:any,itemID:number|undefined,context:OpenContext):(()=>Promise<any>)|undefined {
   let selected:any;
-  if(itemID===undefined&&context!=='selection')
-    itemID=Zotero.Reader?.getByTabID?.(window.Zotero_Tabs?.selectedID)?.itemID;
+  if(itemID===undefined&&context!=='selection'){
+    const tabID=window?.Zotero_Tabs?.selectedID;
+    if(tabID!==undefined&&tabID!==null)itemID=Zotero.Reader?.getByTabID?.(tabID)?.itemID;
+  }
   if(itemID===undefined){
-    const selection=window.ZoteroPane?.getSelectedItems?.()||[];
+    const selection=window?.ZoteroPane?.getSelectedItems?.()||[];
     if(!selection.length&&context==='auto')return;
     if(selection.length!==1)throw new Error('请只选择一个 PDF 附件或一篇论文。');
     selected=selection[0];itemID=selected.id;
@@ -365,6 +367,11 @@ function captureOpenRequest(window:any,itemID:number|undefined,context:OpenConte
 function focusWindow(w:any){
   try{if(typeof w.STATE_MINIMIZED==='number'&&w.windowState===w.STATE_MINIMIZED)w.restore?.();}catch{}
   try{w.focus();}catch{}
+}
+function dialogOwner(preferredWindow:any){
+  const candidates=[()=>preferredWindow,()=>Zotero.getMainWindow?.(),()=>Services.wm?.getMostRecentWindow?.(null),()=>Services.appShell?.hiddenDOMWindow];
+  for(const read of candidates)try{const w=read();if(w&&!confirmedClosed(w)&&typeof w.openDialog==='function')return w;}catch{}
+  throw new Error('Zotero 暂无可用的阅读窗口，请打开主窗口后重新打开工作台。已有译文和进度保留。');
 }
 function windowBinding(w:any):any {
   try{return w.paperWeaveGetState?.()?.binding||w.arguments?.[0]?.binding;}catch{return undefined;}
@@ -417,7 +424,7 @@ export async function openWorkbench(window:any,itemID?:number,context:OpenContex
     if(!current())return;
     const bridge=createWorkbenchBridge(item,requestID);
     // A fresh native target prevents Gecko from recycling another document's arguments.
-    const w=window.openDialog(WORKBENCH_URL,WORKBENCH_NAME+'-'+requestID,
+    const w=dialogOwner(window).openDialog(WORKBENCH_URL,WORKBENCH_NAME+'-'+requestID,
       'chrome,resizable,centerscreen,width=1140,height=840',bridge);
     if(!w)throw new Error('无法打开 PaperWeave 工作台。');
     windows.set(`${item.libraryID}:${item.key}`,w);shared.windows.add(w);

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-alpha.46
+
+- Fix `host.getMainWindow() is null` while capturing source regions after a library window closes. Supply task controllers and packaged-font requests from the application DOM realm so an open workbench no longer depends on a live library window.
+- Reconnect screenshots to the bound source attachment through Zotero's background standalone reader when no library window exists, including a library closing during unloaded-tab selection. Retain bounded rendering retries, cancellation and canvas cleanup.
+- Handle workbench entry and native dialog ownership without a library window. Preserve paper-session identity checks, singleton behavior, saved translations, manual revisions and strict PDF review gates.
+- Recover zero-gap prose/monospace boundaries around API names, small-cap heading words/acronyms and discretionary line-break joins from SDT glyph data. Advance extraction to v11; preserve saved/manual wording and flag retained glue artifacts for review. Rebind existing OCR only for whitespace-equivalent source with identical page geometry and ownership.
+- Fix torn mathematical parentheses, letters and symbols in PDF vectors. Convert MathJax quadratic and smooth glyph curves to explicit cubic outlines with exact control-point reflection before PDF drawing; retain formula text, metrics and local vector output.
+- Add offline regressions for missing/closing windows, source-reader reconnection, unloaded tabs, cancellation, bounded failure, packaged-font byte ownership, dialog fallback, source boundaries, OCR preservation and SVG curve geometry. Type checks, complete offline regressions and packaging pass. Inspect actual NCCL EP b121/b122 vector output and safely migrate a copy of all 284 blocks, retaining 204 translations and 7 adopted OCR layers. Native Zotero acceptance remains pending; no model requests or live project-cache changes were made.
+
 ## 0.1.0-alpha.45
 
 - Recover paragraph protection failures with bounded, complete-sentence requests using short references and readable source bindings. Preserve natural Chinese reordering, canonical formulas, glossary values and bold/math offsets; validate both each group and the assembled paragraph.

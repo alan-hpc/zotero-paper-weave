@@ -5,13 +5,14 @@ import { inlineIdentity, SCRIPT_EXPRESSION, rebaseMathRefs, mathReviewRequired }
 import { applyAuthorMetadata } from './frontMatter';
 import { applyGraphicRegions } from './graphics';
 import { applyProseGroups } from './proseGroups';
+import { rebindVisionWhitespace } from './vision';
 
 export const sourceIdentity=(text:string)=>inlineIdentity(withoutListMarkers(text).text);
 const protectedKinds=new Set(['math','figure','table','caption','code']);
 function retainedSourceArtifact(old:Block,fresh:Block):boolean {
-  return [...old.source.matchAll(/[A-Za-z][^\s,;:()]*/gu)].some(m=>m[0].length>=5&&
+  return [...old.translation.matchAll(/[A-Za-z][A-Za-z0-9_./+−≤≥-]*/gu)].some(m=>m[0].length>=5&&
     !/^(?:Equation|Algorithm|Section|Figure|Table)\d+(?:\.\d+)*$/u.test(m[0])&&
-    old.translation.includes(m[0])&&!fresh.source.includes(m[0]));
+    old.source.includes(m[0])&&!fresh.source.includes(m[0]));
 }
 
 /** Apply refreshed layout metadata only when every saved source paragraph still matches. */
@@ -30,7 +31,7 @@ export function reconcileExtraction(existing:Project,refreshed:Project):boolean 
       translation:old.translation,edited:old.edited,translatedWith:old.translatedWith,
       translationMathRefs:rebaseMathRefs(old,fresh),
       translationBoldRanges:old.translationBoldRanges};
-    block.vision=old.vision;block.visionHistory=old.visionHistory;block.translationVisionKey=old.translationVisionKey;
+    block.vision=rebindVisionWhitespace(existing,old,fresh);block.visionHistory=old.visionHistory;block.translationVisionKey=old.translationVisionKey;
     if(old.source===fresh.source){block.translationFailure=old.translationFailure;block.translationRecovery=old.translationRecovery;}
     block.translationBoldRanges=translatedBoldRanges(block);
     const inlineMath=block.preserveSource&&/[∈∉=≈≠≤≥×÷±∑√∫⁰-⁹₀-₉\u02B0-\u02FF\u2070-\u209F\u1D2C-\u1D6A]/u.test(block.source);
@@ -43,9 +44,9 @@ export function reconcileExtraction(existing:Project,refreshed:Project):boolean 
       block.translationNeedsRefresh=true;
     if(mathReviewRequired(block))block.translationNeedsRefresh=true;
     const boundaryRepair=old.source!==fresh.source&&sourceIdentity(old.source)===sourceIdentity(fresh.source)&&
-      (existing.extractionVersion||0)<9&&retainedSourceArtifact(old,fresh);
+      (existing.extractionVersion||0)<EXTRACTION_VERSION&&retainedSourceArtifact(old,fresh);
     if(boundaryRepair&&old.translation.trim()){
-      block.sourceRepairReason='已依据原 PDF 字形恢复正文、变量和引用边界；旧译文需复核。';
+      block.sourceRepairReason='已依据原 PDF 字形恢复正文、标识符、标题和变量边界；旧译文需复核。';
       block.translationNeedsRefresh=true;
     }else block.sourceRepairReason=old.sourceRepairReason;
     return block;

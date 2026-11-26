@@ -99,8 +99,8 @@ try {
 
   const lifecycle=[];
   const sandbox={Components:{classes:{'@mozilla.org/addons/addon-manager-startup;1':{getService:()=>({registerChrome:()=>({destruct:()=>lifecycle.push('destruct')})})}},interfaces:{amIAddonManagerStartup:{}},utils:{}},
-    Zotero:{initializationPromise:Promise.resolve(),getMainWindows:()=>['main']},
-    Services:{io:{newURI:x=>x},scriptloader:{loadSubScript:(uri,scope)=>{for(const name of ['Cc','Ci','IOUtils','PathUtils','URL','setTimeout','clearTimeout'])assert.ok(scope[name]);scope.PaperWeaveController={start:async()=>{await Promise.resolve();lifecycle.push('start');},attach:()=>lifecycle.push('attach'),stop:async()=>lifecycle.push('stop')};}}},
+    Zotero:{initializationPromise:Promise.resolve(),getMainWindows:()=>['main'],getMainWindow:()=>{throw new Error('library window must not supply runtime constructors');}},
+    Services:{appShell:{hiddenDOMWindow:{AbortController,XMLHttpRequest:class StableRequest{}}},io:{newURI:x=>x},scriptloader:{loadSubScript:(uri,scope)=>{for(const name of ['Cc','Ci','IOUtils','PathUtils','URL','setTimeout','clearTimeout','AbortController','XMLHttpRequest'])assert.ok(scope[name]);assert.equal(scope.AbortController,AbortController);scope.PaperWeaveController={start:async()=>{await Promise.resolve();lifecycle.push('start');},attach:()=>lifecycle.push('attach'),stop:async()=>lifecycle.push('stop')};}}},
     ChromeUtils:{importESModule:()=>({setTimeout,clearTimeout})},IOUtils:{},PathUtils:{},URL};
   vm.createContext(sandbox);vm.runInContext(await readFile('addon/bootstrap.js','utf8'),sandbox);
   await sandbox.startup({id:'paperweave@test',version:'test',rootURI:'file:///addon/'});await sandbox.shutdown();
@@ -234,6 +234,12 @@ try {
   await new Promise(r=>setTimeout(r,0));cancelledRender.abort();
   await assert.rejects(cancelledPromise,{name:'AbortError'});assert.equal(cancelledMock.state.cancels,1);assert.equal(cancelledMock.state.renders,1);
   console.log('PASS background print rendering, timeout/retry, PNG encoding cancellation and canvas cleanup');
+  const {verifyWindowRuntime}=await import('./window-runtime-regression.mjs');
+  await verifyWindowRuntime(moduleFor);
+  const {verifySourceSpacing}=await import('./source-spacing-regression.mjs');
+  await verifySourceSpacing(moduleFor);
+  const {verifySvgCurves}=await import('./svg-curves-regression.mjs');
+  await verifySvgCurves(moduleFor);
 
   const {readAsset}=await moduleFor('src/assets.ts');
   class AssetRequest {

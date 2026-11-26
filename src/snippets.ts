@@ -7,17 +7,30 @@ interface Session {pdf:any;targetWindow:any}
 /** Offscreen print rendering avoids requestAnimationFrame in inactive Zotero tabs. */
 export async function snippetRenderer(host:any,item:any,utilities:any,setupSignal?:AbortSignal,settings:{timeoutMS?:number;maxScale?:number;maxPixels?:number;maxDimension?:number}={}) {
   let session:Session|undefined;
-  const controller=():AbortController=>new(host.getMainWindow().AbortController)();
+  const controller=():AbortController=>new AbortController();
   const timeoutMS=settings.timeoutMS??30000;
+  const mainWindow=()=>{
+    try{const w=host.getMainWindow?.();return w&&!w.closed?w:undefined;}catch{return undefined;}
+  };
   async function connect(signal:AbortSignal):Promise<Session> {
     if(session){
       try{if(!session.targetWindow.closed && !session.pdf.destroyed)return session;}catch{}
       session=undefined;
     }
-    let reader=await host.Reader.open(item.id,undefined,{openInBackground:true});
+    let standalone=!mainWindow();
+    let reader=await host.Reader.open(item.id,undefined,{openInBackground:true,openInWindow:standalone});
     for(let n=0;n<300;n++){
       signal.throwIfAborted();
-      reader ||= host.Reader.getByTabID(host.getMainWindow().Zotero_Tabs.getTabIDByItemID(item.id));
+      if(!reader){
+        const window=mainWindow();
+        const tabID=window?.Zotero_Tabs?.getTabIDByItemID?.(item.id);
+        if(tabID!==undefined&&tabID!==null)reader=host.Reader.getByTabID(tabID);
+        // An unloaded tab may have selected the library just before it closed.
+        // Reconnect to this same attachment using Zotero's reader-window API.
+        if(!reader&&!window&&!standalone){
+          standalone=true;reader=await host.Reader.open(item.id,undefined,{openInBackground:true,openInWindow:true});
+        }
+      }
       const app=reader?._iframeWindow?.wrappedJSObject?.PDFViewerApplication;
       if(app?.pdfDocument){
         session={pdf:utilities.waiveXrays(app.pdfDocument),targetWindow:utilities.waiveXrays(app.pdfViewer.container.ownerDocument.defaultView)};

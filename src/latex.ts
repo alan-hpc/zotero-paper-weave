@@ -5,6 +5,7 @@ import {liteAdaptor} from 'mathjax-full/js/adaptors/liteAdaptor.js';
 import {RegisterHTMLHandler} from 'mathjax-full/js/handlers/html.js';
 import 'mathjax-full/js/input/tex/ams/AmsConfiguration.js';
 import {PDFPage, Color, pushGraphicsState, popGraphicsState, concatTransformationMatrix} from 'pdf-lib';
+import {cubicSvgPath} from './svgPath';
 
 type Matrix=[number,number,number,number,number,number];
 interface Shape {path:string;matrix:Matrix}
@@ -41,7 +42,7 @@ export function latexBox(tex:string):LatexBox {
   const visit=(element:any,matrix:Matrix,root=false)=>{
     const kind=adaptor.kind(element);if(kind==='#text')return;
     const next=root?matrix:multiply(matrix,transform(adaptor.getAttribute(element,'transform')||''));
-    if(kind==='path')shapes.push({path:adaptor.getAttribute(element,'d'),matrix:next});
+    if(kind==='path')shapes.push({path:cubicSvgPath(adaptor.getAttribute(element,'d')),matrix:next});
     else if(kind==='rect'){
       const x=Number(adaptor.getAttribute(element,'x')||0),y=Number(adaptor.getAttribute(element,'y')||0),w=Number(adaptor.getAttribute(element,'width')),h=Number(adaptor.getAttribute(element,'height'));
       shapes.push({path:`M${x} ${y}h${w}v${h}h${-w}Z`,matrix:next});

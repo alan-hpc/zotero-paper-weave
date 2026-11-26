@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {binaryBoundaryFixture} from './binary-fixture.mjs';
 
 export async function verifyPaperSessions(moduleFor){
-  const old=new Map(['Zotero','Services','IOUtils','PathUtils','Cu'].map(k=>[k,globalThis[k]]));
+  const old=new Map(['Zotero','Services','IOUtils','PathUtils','Cu','XMLHttpRequest'].map(k=>[k,globalThis[k]]));
   const files=new Map(),writes=[],created=[],alerts=[];
   let imports=0,selected,activeReader;
   class Item {async getBestAttachments(){return [];}}
@@ -101,14 +101,28 @@ export async function verifyPaperSessions(moduleFor){
     const readBefore=IOUtils.read;
     IOUtils.read=async path=>{if(imageFiles.has(path))return boundary.wrap(imageFiles.get(path));throw Object.assign(new Error('missing image'),{name:'NotFoundError'});};
     IOUtils.write=async(path,bytes)=>{assert.ok(boundary.wasCloned(bytes),'PNG data is cloned into the storage API realm before writing');assert.ok(boundary.targets.includes(IOUtils));imagePaths.push(path);imageFiles.set(path,bytes);};
-    Zotero.getMainWindow=()=>({AbortController});Zotero.Promise={delay:async()=>{}};
-    Zotero.Reader.open=async id=>{screenshotItems.push(id);return{_iframeWindow:{wrappedJSObject:{PDFViewerApplication:{pdfDocument:pdf,pdfViewer:{container:{ownerDocument:{defaultView:target}}}}}}};};
+    Zotero.getMainWindow=()=>null;Zotero.Promise={delay:async()=>{}};
+    Zotero.Reader.open=async(id,_location,options)=>{assert.equal(options.openInWindow,true);assert.equal(options.openInBackground,true);screenshotItems.push(id);return{_iframeWindow:{wrappedJSObject:{PDFViewerApplication:{pdfDocument:pdf,pdfViewer:{container:{ownerDocument:{defaultView:target}}}}}}};};
     Cu.waiveXrays=value=>value;Cu.cloneInto=boundary.cloneInto;
     const screenshots=await replayBridge.visionImages(replay,projectFor(replay),'p0-0',new AbortController().signal,()=>{});
     assert.equal(screenshots.length,1);assert.deepEqual(screenshotItems,[replay.id]);
     assert.ok(imagePaths.every(path=>path.includes('1-REPLAY01-identical-bytes')));
     await replayBridge.visionImages(replay,projectFor(replay),'p0-0',new AbortController().signal,()=>{});
     assert.equal(screenshotItems.length,1,'the source-bound PNG cache avoids reopening a different reader');IOUtils.read=readBefore;
+
+    // Font reads use the application constructor even after the library closes.
+    const fontPaths=[],fontBuffer=new Uint8Array([0,255,128]).buffer;
+    globalThis.XMLHttpRequest=class StableFontRequest {
+      open(method,path,async){assert.equal(method,'GET');assert.equal(async,true);fontPaths.push(path);}
+      send(){assert.equal(this.responseType,'arraybuffer');this.status=200;this.response=boundary.wrap(fontBuffer);this.onload();}
+    };
+    Zotero.getMainWindow=()=>{throw new Error('fonts must not access a library window');};
+    for(const font of [replayBridge.fontBytes,replayBridge.monoFontBytes]){
+      const bytes=await font();assert.deepEqual([...bytes],[0,255,128]);bytes[0]=99;
+      assert.equal(new Uint8Array(fontBuffer)[0],0,'font bytes belong to the caller after cloning');
+    }
+    assert.deepEqual(fontPaths,['file:///addon/chrome/content/fonts/NotoSerifSC-Regular.ttf','file:///addon/chrome/content/fonts/SarasaMonoSC-Regular.ttf']);
+    Zotero.getMainWindow=()=>null;
 
     const replayCache=files.get(cachePath(replay));files.set(cachePath(replay),JSON.stringify(projectFor(linear)));
     const checkpoint=writes.length;
@@ -140,11 +154,23 @@ export async function verifyPaperSessions(moduleFor){
     await controller.openWorkbench(main,output.id);
     assert.equal(created.length,count);assert.match(alerts.at(-1),/对应关系不一致/);
     assert.equal(imports,0);
+
+    // A reader/workbench entry remains usable without a library owner. No-ID
+    // requests only focus the bound paper and never inspect an undefined tab.
+    const focusBefore=created.at(-1).focusCount;
+    Zotero.Reader.getByTabID=id=>{assert.notEqual(id,undefined);return activeReader;};
+    await controller.openWorkbench(null);
+    assert.equal(created.length,count);assert.equal(created.at(-1).focusCount,focusBefore+1);
+    Services.appShell={hiddenDOMWindow:{closed:false,openDialog:main.openDialog}};
+    await controller.openWorkbench(null,replay.id);
+    assert.equal(created.at(-1).arguments[0].item.key,replay.key);
+    assert.equal(created.filter(w=>!w.closed).length,1);
     // IOUtils buffers are wrapped on input, and must be native to IOUtils on output.
     IOUtils.read=async()=>boundary.wrap(png);
     assert.deepEqual([...await replayBridge.sourceBytes(replay,projectFor(replay))],[...png]);
     Zotero.Libraries={get:()=>({editable:true,filesEditable:true})};Zotero.getTempDirectory=()=>({path:'/mock/temp'});
     Zotero.Prefs.set=()=>{};IOUtils.remove=async()=>{};
+    Zotero.Reader.open=async id=>{assert.equal(id,4,'open the generated attachment after saving');};
     Zotero.Attachments.importFromFile=async args=>{imports++;assert.equal(args.parentItemID,replay.parentID);return{id:4,key:'NEWPDF04',libraryID:1};};
     const attachment=await replayBridge.attachPDF(replay,projectFor(replay),new Uint8Array([37,80,68,70]),false);
     assert.equal(attachment.key,'NEWPDF04');assert.equal(imports,1);
@@ -153,5 +179,5 @@ export async function verifyPaperSessions(moduleFor){
     await controller?.stop();
     for(const [key,value]of old)if(value===undefined)delete globalThis[key];else globalThis[key]=value;
   }
-  console.log('PASS paper sessions: ReplaySSM/Linear entry selection, idle save/switch, busy retention, fresh native targets, latest intent, cache isolation and wrong-paper write guards');
+  console.log('PASS paper sessions: ReplaySSM/Linear entry selection, idle save/switch, busy retention, fresh native targets, latest intent, cache isolation, wrong-paper write guards and library-independent font/dialog access');
 }

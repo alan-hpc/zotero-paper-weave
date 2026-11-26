@@ -6,6 +6,7 @@ export async function verifyVision(moduleFor){
   const {Provider,recordTranslation}=await moduleFor('src/provider.ts');
   const {validateProject}=await moduleFor('src/model.ts');
   const {resolveSettings}=await moduleFor('src/settings.ts');
+  const {reconcileExtraction}=await moduleFor('src/upgrade.ts');
   const png=new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4//8/AAX+Av4N70a4AAAAAElFTkSuQmCC','base64'));
   const settings={baseURL:'https://api.deepseek.com/v1',model:'deepseek-flash',prompt:''};
   const block={id:'b1',kind:'body',source:'The terms withj≤huse cached corrections.',translation:'旧译文 withj≤huse。',edited:false,
@@ -71,6 +72,19 @@ export async function verifyVision(moduleFor){
     assert.equal(block.translationVisionKey,block.vision.cacheKey);assert.equal(block.source,saved.source);
     assert.deepEqual(vision.visionRenderBlock(block).mathSpans,[]);assert.equal(vision.visionRenderBlock(block).sourceRepairReason,undefined);
     assert.ok(block.translation.includes(String.raw`\(j\le h\)`));assert.equal(vision.visionNeedsReview(block),false);
+    const spaced=structuredClone(project),fresh=structuredClone(project);
+    spaced.extractionVersion=10;fresh.blocks[0].source='The terms with j≤h use cached corrections.';
+    const before=structuredClone(spaced.blocks[0].vision);
+    assert.equal(reconcileExtraction(spaced,fresh),true);
+    assert.equal(vision.visionMatches(spaced,spaced.blocks[0]),true);
+    assert.equal(vision.visionSourceBlock(spaced.blocks[0]).source,vision.visionSourceBlock(block).source);
+    assert.equal(spaced.blocks[0].vision.cacheKey,before.cacheKey);
+    assert.equal(spaced.blocks[0].vision.rawSourceText,before.rawSourceText);
+    assert.equal(spaced.blocks[0].translation,block.translation);assert.equal(vision.visionNeedsReview(spaced.blocks[0]),false);
+    for(const mismatch of [{...fresh.blocks[0],rects:[[0,40,500,500,550]]},{...fresh.blocks[0],source:'Changed source text.'}]){
+      const rebound=vision.rebindVisionWhitespace(project,block,mismatch);
+      assert.equal(rebound,block.vision,'changed geometry/content is never relabeled as matching OCR');
+    }
     const originalOCR=block.vision.rawSourceText;
     vision.editVisionText(project,block,String.raw`The terms satisfying \(j\le h\) use cached corrections.`);
     assert.equal(block.vision.rawSourceText,originalOCR);assert.equal(block.vision.active,false);assert.equal(block.vision.manuallyEdited,true);

@@ -45,6 +45,16 @@ function gapSpace(a:Box,b:Box):boolean {
   const sameLine=Math.min(a[4],b[4])-Math.max(a[2],b[2])>height*.25;
   return sameLine?b[1]-a[3]>height*.18:b[1]<a[1]&&a[2]-b[2]>height*.5;
 }
+/** Small-cap headings can omit every space at a cap-size change. A single
+ * leading capital belongs to its word (C + OMPARISON); multi-letter runs on
+ * both sides identify separate words/acronyms (OF + HT + AND + LL + KERNEL).
+ */
+function smallCapBoundary(a:Run,b:Run):boolean {
+  const left=a.text.trim().match(/[A-Z]+$/u)?.[0],right=b.text.trim().match(/^[A-Z]+/u)?.[0];
+  if(!left||left.length<2||!right||right.length<2||a.box[0]!==b.box[0])return false;
+  const ha=a.box[4]-a.box[2],hb=b.box[4]-b.box[2];
+  return Math.abs(ha-hb)>Math.max(ha,hb)*.1&&Math.abs(a.box[2]-b.box[2])<Math.max(ha,hb)*.2;
+}
 function spacedText(run:Run):string {
   let result='',index=0,previous:Box|undefined;
   for(const c of run.text){
@@ -80,8 +90,9 @@ export function normalizeSourceNode<T extends SourceNode>(node:T,context=node.ty
     const left=content[i-1],right=content[i],a=left.text!,b=right.text!;
     const script=right.style?.sub||right.style?.sup;
     const mathBoundary=!!left.style?.italic!==!!right.style?.italic||/^\d+(?:\.\d+)?$/u.test(a.trim())||/^\d+(?:\.\d+)?$/u.test(b.trim());
-    if(a&&!/\s$/u.test(a)&&b&&!/^\s/u.test(b)&&!script&&
-      (gapSpace(runs[i-1].glyphs.at(-1)!,runs[i].glyphs[0])||mathBoundary&&
+    const discretionaryJoin=!!(runs[i-1].packed[0]&1);
+    if(a&&!/\s$/u.test(a)&&b&&!/^\s/u.test(b)&&!script&&!discretionaryJoin&&
+      (gapSpace(runs[i-1].glyphs.at(-1)!,runs[i].glyphs[0])||context==='heading'&&smallCapBoundary(runs[i-1],runs[i])||mathBoundary&&
        /[\p{L}\p{N})]$/u.test(a)&&/^[\p{L}\p{N}(]/u.test(b)))right.text=' '+b;
   }
   return {...node,text:undefined,content};
@@ -105,6 +116,8 @@ export function sourceBoundarySpace(left:SourceNode|undefined,right:SourceNode):
   if(!a||!b||/\s$/u.test(a.text!)||/^\s/u.test(b.text!)||b.style?.sub||b.style?.sup)return false;
   const ra=runsOf(a).at(-1),rb=runsOf(b)[0];
   if(!ra||!rb)return false;
-  return gapSpace(ra.glyphs.at(-1)!,rb.glyphs[0])||!!a.style?.italic!==!!b.style?.italic&&
+  if(ra.packed[0]&1)return false; // The line-ending discretionary hyphen was omitted by SDT.
+  return gapSpace(ra.glyphs.at(-1)!,rb.glyphs[0])||
+    (!!a.style?.italic!==!!b.style?.italic||!!a.style?.monospace!==!!b.style?.monospace)&&
     /[\p{L}\p{N})]$/u.test(a.text!)&&/^[\p{L}\p{N}(]/u.test(b.text!);
 }

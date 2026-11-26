@@ -10,7 +10,10 @@ async function startup({ id, version, rootURI }) {
     .registerChrome(Services.io.newURI(rootURI + "manifest.json"),
       [["content", "paperweave", "chrome/content/"]]);
   const { setTimeout, clearTimeout } = ChromeUtils.importESModule('resource://gre/modules/Timer.sys.mjs');
-  const scope = { Zotero, Services, Cc, Ci, Cu, ChromeUtils, IOUtils, PathUtils, URL, setTimeout, clearTimeout };
+  // The library window can close while a workbench remains alive. Keep DOM
+  // constructors in the application realm rather than looking up that window.
+  const { AbortController, XMLHttpRequest } = Services.appShell.hiddenDOMWindow;
+  const scope = { Zotero, Services, Cc, Ci, Cu, ChromeUtils, IOUtils, PathUtils, URL, setTimeout, clearTimeout, AbortController, XMLHttpRequest };
   Services.scriptloader.loadSubScript(rootURI + "controller.js", scope);
   controller = scope.PaperWeaveController;
   await controller.start({ id, version, rootURI });

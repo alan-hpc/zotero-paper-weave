@@ -5,7 +5,7 @@ export async function verifyMathPipeline(moduleFor){
   const {inlineMathText,protectSourceMath,rebaseMathRefs}=await moduleFor('src/inlineMath.ts');
   const {Provider,recordTranslation}=await moduleFor('src/provider.ts');
   const {styledRuns,wrapStyled,positionLine,runWidth}=await moduleFor('src/typography.ts');
-  const {validateProject}=await moduleFor('src/model.ts');
+  const {validateProject,EXTRACTION_VERSION}=await moduleFor('src/model.ts');
   const {recognizeMath}=await moduleFor('src/mathRecognition.ts');
   const {sourceMathLatex,inlineMathPlan}=await moduleFor('src/mathPresentation.ts');
   const {visionNeedsReview}=await moduleFor('src/vision.ts');
@@ -84,7 +84,7 @@ export async function verifyMathPipeline(moduleFor){
   assert.equal(reconcileExtraction(oldProject,{...oldProject,blocks:[structuredClone(reviewedAbstract)]}),true);
   assert.equal(oldProject.blocks[0].translation,reviewedAbstract.translation,'math reclassification preserves existing wording');
   assert.equal(oldProject.blocks[0].edited,true);assert.equal(oldProject.blocks[0].translationNeedsRefresh,false);
-  assert.equal(oldProject.extractionVersion,10,'old math metadata is refreshed without an API call');
+  assert.equal(oldProject.extractionVersion,EXTRACTION_VERSION,'old math metadata is refreshed without an API call');
   const touching='one T×T triangular solve';
   const touchingSpan=recognizeMath(touching,[leaf('one',100.0000000000001,650),leaf('T×T',115,650),leaf(' triangular solve',129.9,650)])[0];
   assert.equal(touching.slice(touchingSpan.start,touchingSpan.end),'T×T');

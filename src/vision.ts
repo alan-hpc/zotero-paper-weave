@@ -27,6 +27,16 @@ const blockKey=(b:Block)=>visionFingerprint(JSON.stringify([b.id,b.source,b.rect
 export function visionMatches(project:Project,b:Block):boolean {
   const v=b.vision;return !!v&&v.protocol===VISION_PROTOCOL&&v.sourceKey===project.source.key&&v.sourceHash===project.source.hash&&v.blockID===b.id&&v.inputKey===visionInputKey(project,b);
 }
+/** Rebind an existing OCR layer only when whitespace is the sole source change
+ * and its exact page geometry/group ownership still belongs to the same paper.
+ * The recognized text, request provenance and translation version stay intact.
+ */
+export function rebindVisionWhitespace(project:Project,old:Block,fresh:Block):VisionRecord|undefined {
+  const compact=(s:string)=>s.replace(/\s+/gu,'');
+  const geometry=(b:Block)=>JSON.stringify([b.id,b.rects,b.proseGroup?{...b.proseGroup,source:compact(b.proseGroup.source)}:null]);
+  if(!visionMatches(project,old)||compact(old.source)!==compact(fresh.source)||geometry(old)!==geometry(fresh))return old.vision;
+  return {...old.vision!,inputKey:visionInputKey(project,fresh),blockKey:blockKey(fresh)};
+}
 export const visionNeedsReview=(b:Block)=>!b.originalGraphic&&!b.proseGroupAnchor&&!b.frontMatter&&(b.kind==='body'||b.kind==='heading')&&
   (!!b.translationFailure||!!b.translationRecovery||!!b.translationNeedsRefresh||!!b.sourceRepairReason||inlineMathPlan(visionRenderBlock(b)).needsReview||visionRenderBlock(b).mathSpans?.some(s=>s.representation==='review')===true);
 
