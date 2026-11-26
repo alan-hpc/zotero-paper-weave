@@ -13,6 +13,7 @@ import { snippetRenderer } from './snippets';
 import { captureVisionImages } from './visionCapture';
 import { visionMatches } from './vision';
 import { copyBytes,ByteSource } from './bytes';
+import { applyProseGroups } from './proseGroups';
 
 let meta: { id: string; version: string; rootURI: string };
 const menus = new Map<any, { nodes: any[]; popup: any; listener: any }>();
@@ -172,7 +173,8 @@ export async function loadProject(item: any, progress: (s: string) => void, sign
       await saveProject(existing);
     }
     const authorsChanged=applyAuthorMetadata(existing).changed;
-    if(applyGraphicRegions(existing).changed||authorsChanged)await saveProject(existing);
+    const graphicsChanged=applyGraphicRegions(existing).changed,proseChanged=applyProseGroups(existing).changed;
+    if(graphicsChanged||proseChanged||authorsChanged)await saveProject(existing);
     return existing;
   }
   const project = await extractProject(Zotero, item, meta.version, progress, signal);
@@ -310,7 +312,7 @@ function createWorkbenchBridge(item:any,sessionID:string){
       if(!block)throw new Error('目标段落已不存在。');
       const folder=PathUtils.join(directory(),'vision',`${binding.libraryID}-${binding.key}-${project.source.hash}`);
       await IOUtils.makeDirectory(folder,{createAncestors:true,ignoreExisting:true,permissions:0o700});
-      drawVision ||= await snippetRenderer(Zotero,item,Cu,undefined,{maxScale:3,maxPixels:4000000,maxDimension:8192});
+      drawVision ||= await snippetRenderer(Zotero,item,Cu,undefined,{maxScale:6,maxPixels:4000000,maxDimension:8192});
       const images=await captureVisionImages(project,block,drawVision,{
         read:async key=>{try{return copyBytes(await IOUtils.read(PathUtils.join(folder,key+'.png')),(value,target)=>Cu.cloneInto(value,target));}catch(e:any){if(e.name==='NotFoundError')return null;throw e;}},
         write:async(key,bytes)=>{signal.throwIfAborted();await IOUtils.write(PathUtils.join(folder,key+'.png'),Cu.cloneInto(bytes,IOUtils),{permissions:0o600});}

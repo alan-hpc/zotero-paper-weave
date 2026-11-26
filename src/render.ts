@@ -108,12 +108,17 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
   for(const group of graphics)byAnchor.set(group.anchorID,[...(byAnchor.get(group.anchorID)||[]),group]);
 
   for (const savedBlock of project.blocks) {
+    if(savedBlock.proseGroupAnchor&&!savedBlock.kindEdited)continue;
     const block=visionRenderBlock(savedBlock);
     signal.throwIfAborted();
     for(const group of byAnchor.get(block.id)||[]) {
       const pageIndex=group.sourcePage,crop=source.getPage(pageIndex).getCropBox(),pad=3;
-      const box={left:Math.max(crop.x,group.box.left-pad),bottom:Math.max(crop.y,group.box.bottom-pad),
-        right:Math.min(crop.x+crop.width,group.box.right+pad),top:Math.min(crop.y+crop.height,group.box.top+pad)};
+      const neighbors=graphics.filter(other=>other!==group&&other.sourcePage===pageIndex&&
+        Math.min(other.box.right,group.box.right)>Math.max(other.box.left,group.box.left));
+      const below=neighbors.filter(other=>other.box.top<=group.box.bottom).map(other=>(group.box.bottom-other.box.top)/2);
+      const above=neighbors.filter(other=>other.box.bottom>=group.box.top).map(other=>(other.box.bottom-group.box.top)/2);
+      const box={left:Math.max(crop.x,group.box.left-pad),bottom:Math.max(crop.y,group.box.bottom-Math.min(pad,...below)),
+        right:Math.min(crop.x+crop.width,group.box.right+pad),top:Math.min(crop.y+crop.height,group.box.top+Math.min(pad,...above))};
       if(!(box.right>box.left&&box.top>box.bottom))throw new Error(`${block.id} 的图表裁切范围无效。`);
       const label=`截取原文第 ${pageIndex+1} 页图表 ${group.label||block.id}`;
       const image=await embeddedPage(pageIndex),imageWidth=box.right-box.left,imageHeight=box.top-box.bottom;
@@ -150,8 +155,14 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
         // text column at the same vertical slice so the original numbers are retained too.
         const columnLeft=column.length?Math.min(...column.map(candidate=>candidate.rect[1])):rect[1];
         const columnRight=column.length?Math.max(...column.map(candidate=>candidate.rect[3])):rect[3];
-        const left=Math.max(crop.x,Math.min(rect[1],columnLeft)-pad),bottom=Math.max(crop.y,rect[2]-pad);
-        const right=Math.min(crop.x+crop.width,Math.max(rect[3],columnRight)+pad),top=Math.min(crop.y+crop.height,rect[4]+pad);
+        const left=Math.max(crop.x,Math.min(rect[1],columnLeft)-pad),right=Math.min(crop.x+crop.width,Math.max(rect[3],columnRight)+pad);
+        // Closely stacked equations have less than two padding margins between them.
+        // Bound each margin by the shared midpoint so a crop cannot repeat its neighbor.
+        const neighbors=project.blocks.filter(b=>b!==savedBlock&&!b.proseGroupAnchor).flatMap(b=>b.proseGroup?.rects||b.rects)
+          .filter(r=>r[0]===pageIndex&&Math.min(r[3],right)>Math.max(r[1],left));
+        const below=neighbors.filter(r=>r[4]<=rect[2]).map(r=>(rect[2]-r[4])/2);
+        const above=neighbors.filter(r=>r[2]>=rect[4]).map(r=>(r[2]-rect[4])/2);
+        const bottom=Math.max(crop.y,rect[2]-Math.min(pad,...below)),top=Math.min(crop.y+crop.height,rect[4]+Math.min(pad,...above));
         if(!(right>left&&top>bottom))throw new Error(`${block.id} 的公式裁切范围无效。`);
         const previous=boxes.get(pageIndex);
         boxes.set(pageIndex,previous?{left:Math.min(previous.left,left),bottom:Math.min(previous.bottom,bottom),

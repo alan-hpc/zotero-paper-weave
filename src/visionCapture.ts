@@ -7,7 +7,7 @@ export async function captureVisionImages(project:Project,block:Block,
   store:VisionImageStore,signal:AbortSignal,progress:(s:string)=>void):Promise<VisionImage[]> {
   const inputKey=visionInputKey(project,block),output:VisionImage[]=[];
   for(const [index,region]of visionCrops(project,block).entries()){
-    signal.throwIfAborted();const key=inputKey+'-'+index;
+    signal.throwIfAborted();const key=inputKey+'-hi2-'+index;
     let bytes:Uint8Array|null,dataURL:string|undefined;
     try{bytes=await store.read(key);}catch(error){
       signal.throwIfAborted();throw new Error(`读取原文截图缓存失败：${error instanceof Error?error.message:'图像数据不可用'}`);

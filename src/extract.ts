@@ -4,6 +4,7 @@ import { scriptSource } from './inlineMath';
 import { recognizeMath } from './mathRecognition';
 import { applyAuthorMetadata } from './frontMatter';
 import { applyGraphicRegions } from './graphics';
+import { applyProseGroups } from './proseGroups';
 import { normalizeSourceNode, sourceBoundarySpace, referenceBoundaries } from './sourceText';
 
 type Node = {
@@ -178,5 +179,6 @@ export async function extractProject(host: any, item: any, version: string,
   };
   applyAuthorMetadata(project);
   applyGraphicRegions(project);
+  applyProseGroups(project);
   return project;
 }

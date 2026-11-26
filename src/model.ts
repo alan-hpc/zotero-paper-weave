@@ -28,6 +28,8 @@ export interface Block {
   vision?:VisionRecord;
   visionHistory?:VisionRecord[];
   translationVisionKey?:string;
+  proseGroup?:{memberIDs:string[];source:string;rects:Rect[]};
+  proseGroupAnchor?:string;
   /** Author metadata remains on the intact source page and is omitted from translated prose. */
   frontMatter?: 'authors' | 'affiliation' | 'contact' | 'author-note';
   list?: ListInfo;
@@ -48,6 +50,8 @@ export interface Block {
   translationBoldRanges?: TextRange[];
   /** Old saved translation predates inline-style extraction and may have flattened math. */
   translationNeedsRefresh?: boolean;
+  /** Bounded validation failure retained across restarts; never a model draft. */
+  translationFailure?:{kind:'protection';missing:number;repeated:number;unknown:number;at:string};
   translatedWith?: { model: string; provider?: ProviderName; promptVersion: string; at: string };
 }
 export interface Term { source: string; reason: string }
@@ -85,7 +89,7 @@ export interface ModelRouting {
 export interface Settings extends ModelEndpoint { prompt: string; routing?: ModelRouting;visionBeforeReview?:boolean }
 export const PROMPT_VERSION = '9';
 export const EXTRACTION_VERSION = 10;
-export const canTranslate = (b: Block) => (b.kind === 'body' || b.kind === 'heading') && (!b.originalGraphic || !!b.kindEdited);
+export const canTranslate = (b: Block) => (b.kind === 'body' || b.kind === 'heading') && (!b.originalGraphic || !!b.kindEdited)&&(!b.proseGroupAnchor||!!b.kindEdited);
 export const now = () => new Date().toISOString();
 export function validateProject(p: unknown): asserts p is Project {
   const a = p as Project;
@@ -111,9 +115,22 @@ export function validateProject(p: unknown): asserts p is Project {
     if(b.originalGraphic&&(!ids.has(b.originalGraphic.anchorID)&&!a.blocks.some(x=>x.id===b.originalGraphic!.anchorID)||
       !['figure','table','caption','algorithm'].includes(b.originalGraphic.family)))throw new Error('翻译项目含无效的图表区域绑定。');
     if(b.sourceRepairReason!==undefined&&typeof b.sourceRepairReason!=='string')throw new Error('翻译项目含无效的原文修复说明。');
+    if(b.proseGroup){
+      const g=b.proseGroup,parts=Array.isArray(g.memberIDs)?g.memberIDs.map(id=>a.blocks.find(x=>x.id===id)):[];
+      if(parts.length!==3||parts.some(x=>!x)||g.memberIDs[0]!==b.id||new Set(g.memberIDs).size!==3||g.source!==parts.map(x=>x!.source).join(' ')||
+        !Array.isArray(g.rects)||g.rects.length!==1||parts.some(x=>x!.rects.length!==1||x!.rects[0][0]!==g.rects[0][0])||
+        JSON.stringify(g.rects[0])!==JSON.stringify([parts[0]!.rects[0][0],Math.min(...parts.map(x=>x!.rects[0][1])),Math.min(...parts.map(x=>x!.rects[0][2])),Math.max(...parts.map(x=>x!.rects[0][3])),Math.max(...parts.map(x=>x!.rects[0][4]))]))
+        throw new Error('正文组合与原文段落或坐标不匹配。');
+    }
+    if(b.proseGroupAnchor&&!a.blocks.some(x=>x.id===b.proseGroupAnchor&&x.proseGroup?.memberIDs.includes(b.id)))throw new Error('正文组合成员缺少有效的原文锚点。');
+    if(b.translationFailure&&(b.translationFailure.kind!=='protection'||typeof b.translationFailure.at!=='string'||
+      ![b.translationFailure.missing,b.translationFailure.repeated,b.translationFailure.unknown].every(n=>Number.isInteger(n)&&n>=0&&n<=10000)))
+      throw new Error('翻译项目含无效的保护校验记录。');
     if(b.translationVisionKey!==undefined&&!/^[a-f0-9]{16}$/u.test(b.translationVisionKey))throw new Error('图片识别译文绑定无效。');
     if(b.visionHistory!==undefined&&(!Array.isArray(b.visionHistory)||b.visionHistory.length>3))throw new Error('图片识别历史格式无效。');
     for(const v of [...(b.visionHistory||[]),...(b.vision?[b.vision]:[])]){
+      if(v.recognitionVersion!==undefined&&v.recognitionVersion!==2)throw new Error('图片识别流程版本无效。');
+      if(v.sourceStyleRestored!==undefined&&typeof v.sourceStyleRestored!=='boolean')throw new Error('数学样式修复记录无效。');
       if(v.protocol!==1||v.sourceHash!==a.source.hash||v.sourceKey!==a.source.key||v.blockID!==b.id||
         ![v.cacheKey,v.requestKey,v.inputKey,v.blockKey].every(s=>typeof s==='string'&&/^[a-f0-9]{16}$/u.test(s))||
         typeof v.sourceText!=='string'||!v.sourceText.trim()||v.sourceText.length>26000||typeof v.active!=='boolean'||

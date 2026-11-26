@@ -4,6 +4,7 @@ import { withoutListMarkers } from './lists';
 import { inlineIdentity, SCRIPT_EXPRESSION, rebaseMathRefs, mathReviewRequired } from './inlineMath';
 import { applyAuthorMetadata } from './frontMatter';
 import { applyGraphicRegions } from './graphics';
+import { applyProseGroups } from './proseGroups';
 
 export const sourceIdentity=(text:string)=>inlineIdentity(withoutListMarkers(text).text);
 const protectedKinds=new Set(['math','figure','table','caption','code']);
@@ -30,6 +31,7 @@ export function reconcileExtraction(existing:Project,refreshed:Project):boolean 
       translationMathRefs:rebaseMathRefs(old,fresh),
       translationBoldRanges:old.translationBoldRanges};
     block.vision=old.vision;block.visionHistory=old.visionHistory;block.translationVisionKey=old.translationVisionKey;
+    if(old.source===fresh.source)block.translationFailure=old.translationFailure;
     block.translationBoldRanges=translatedBoldRanges(block);
     const inlineMath=block.preserveSource&&/[∈∉=≈≠≤≥×÷±∑√∫⁰-⁹₀-₉\u02B0-\u02FF\u2070-\u209F\u1D2C-\u1D6A]/u.test(block.source);
     const unresolvedBold=!!block.sourceBoldRanges?.length&&!block.translationBoldRanges.length;
@@ -52,5 +54,6 @@ export function reconcileExtraction(existing:Project,refreshed:Project):boolean 
   existing.extractionVersion=EXTRACTION_VERSION;existing.extractionUpgradeAttempted=EXTRACTION_VERSION;
   applyAuthorMetadata(existing);
   applyGraphicRegions(existing);
+  applyProseGroups(existing);
   return true;
 }

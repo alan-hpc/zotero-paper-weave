@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-alpha.44
+
+- Repair notation tables split into ordinary paragraph rows. Extend a trusted Symbol/Description core through adjacent table rows and section labels, retaining full table width and stopping at other numbered tables, narrative text or explicit manual classification.
+- Repair a paragraph interrupted by an inline-math SDT node using derived source groups. Preserve every stored block, coordinate and translation; recognize and translate the complete paragraph once, with source-bound member ownership and no duplicate math/continuation output.
+- Capture unresolved regions at higher resolution with a separate cache revision. Retry old unresolved recognition against the repaired source bounds while retaining accepted/manual source layers. Preserve mathematical font weight and accents in the recognition prompt. Restore missing bold math only when matching PDF glyph counts make the correspondence unambiguous, retaining the raw model response; mixed weights remain reviewable. Numeric and uncertainty checks remain strict.
+- Persist paragraph-level protection failures, route eligible failures through opt-in image repair, and retain all completed/manual translations. Unresolved recognition still prevents PDF generation; export gating is unchanged.
+- Bound padding between adjacent formula/graphic crops to their shared midpoint, retaining complete source bounds and equation numbers without neighboring fragments.
+- Add structure, source-binding, manual-edit, failure-recovery, close-formula and strict-export regressions. In an isolated FlashQLA project copy, correctly group Table 3 fragments and obtain validated recognition and translation for b51/b84 through gpt-6-luna; the copied project has no unresolved review blocks. Original Zotero caches were not modified by these tests.
+
 ## 0.1.0-alpha.43
 
 - Make optional image recognition follow the current enabled/configured model and service priority instead of a fixed DeepSeek profile. Keep an active text-quota transition for subsequent vision and repair requests in the same task; image failures do not forward screenshots elsewhere.

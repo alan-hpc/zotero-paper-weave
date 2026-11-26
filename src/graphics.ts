@@ -126,6 +126,23 @@ export function graphicGroups(project:Project):GraphicGroup[] {
   for(const group of groups)if(group.blockIDs.some(id=>algorithmCore(byID.get(id)!.b))){
     group.family='algorithm';group.label ||= group.blockIDs.map(id=>byID.get(id)!.b.source.match(/\bAlgorithm\s*\d+/u)?.[0]).find(Boolean);
   }
+  // SDT can split a Symbol/Description table into ordinary paragraph rows.
+  // Extend only a trusted table core through adjacent, indented notation rows;
+  // a numbered table, narrative paragraph or manual edit remains a boundary.
+  for(const group of groups.filter(g=>g.family==='table'&&g.label&&g.blockIDs.some(id=>/Symbol\s*Description/iu.test(byID.get(id)!.b.source)))){
+    const rows=project.blocks.filter(b=>!group.blockIDs.includes(b.id)&&b.kind==='body'&&!b.kindEdited&&
+      (!b.edited||b.originalGraphic?.family==='table'&&b.originalGraphic.anchorID===group.anchorID)&&!b.frontMatter&&b.rects.length===1&&b.rects[0][0]===group.sourcePage)
+      .sort((a,b)=>b.rects[0][4]-a.rects[0][4]);
+    for(const b of rows){
+      const r=b.rects[0],gap=group.box.bottom-r[4];
+      if(gap< -1||gap>12||r[1]<group.box.left-8||r[3]>group.box.right+8||b.source.length>650)continue;
+      const dataRow=(b.mathSpans?.length||0)>=2&&!/[.!?]\s+[A-Z]/u.test(b.source);
+      const sectionRow=b.source.length<90&&/^[A-Z][^.!?\n]{1,45}:\s+[A-Za-z]/u.test(b.source);
+      if(!dataRow&&!sectionRow)continue;
+      if(groups.some(other=>other!==group&&other.sourcePage===group.sourcePage&&other.box.top<group.box.bottom&&other.box.top>r[4]))continue;
+      group.box=union(group.box,bounds([b],group.sourcePage)!);group.blockIDs.push(b.id);
+    }
+  }
   for(const block of project.blocks){
     if(block.kindEdited||!algorithmTitle(block))continue;
     for(const sourcePage of new Set(block.rects.map(r=>r[0]))){

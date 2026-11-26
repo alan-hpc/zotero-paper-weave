@@ -21,6 +21,8 @@ try {
   await verifyMathPipeline(moduleFor);
   const {verifyDocumentStructure}=await import('./document-structure-regression.mjs');
   await verifyDocumentStructure(moduleFor);
+  const {verifyStructureRepair}=await import('./structure-repair-regression.mjs');
+  await verifyStructureRepair(moduleFor);
   const {verifyVision}=await import('./vision-regression.mjs');
   await verifyVision(moduleFor);
   const {verifyProtection}=await import('./protection-regression.mjs');
@@ -608,6 +610,8 @@ try {
   assert.equal(loadedProject.blocks[1].translation,'','invalid paragraph is still pending');
   assert.ok(loadedProject.blocks.slice(2).every(b=>b.translation),'later paragraphs continue after a protocol rejection');
   assert.equal(uiCalls.filter(c=>c==='reject').length,3);assert.equal(uiCalls.filter(c=>c==='okay').length,3);
+  assert.equal(loadedProject.blocks[1].translationFailure.kind,'protection');
+  assert.ok(savedRevisions.some(p=>p.blocks[1]?.translationFailure),'failed validation is saved independently of model wording');
   assert.equal(cachedSourceReads,1,'an incomplete project never reaches PDF generation');
   assert.match(elements.get('status').textContent,/已保存 4\/5 段.*b2.*未生成 PDF/);
   assert.equal(loadedProject.blocks[0].translation,'人工修订后的译文。');assert.equal(loadedProject.blocks[0].edited,true);
@@ -616,6 +620,7 @@ try {
   assert.equal(uiCalls.length,beforeResume+1,'resume requests only the remaining rejected paragraph');
   assert.equal(cachedSourceReads,2,'PDF generation becomes eligible only after all paragraphs are saved');
   assert.ok(loadedProject.blocks.every(b=>b.translation));
+  assert.equal(loadedProject.blocks[1].translationFailure,undefined,'successful resume clears the saved failure');
   assert.equal(loadedProject.blocks[0].translation,'人工修订后的译文。');
   for(let i=6;i<=11;i++)loadedProject.blocks.push({id:'b'+i,kind:'body',source:'Network GPU '+i+'.',translation:'',rects:[[0,40,600,550,700]],edited:false});
   let fatalCalls=0;uiContext.fetch=async()=>{fatalCalls++;return{ok:false,status:401};};
@@ -775,6 +780,39 @@ try {
   elements.get('deepseek-model').value='deepseek-flash';
   console.log('PASS current-model vision: Codex without DeepSeek, custom API selection, per-model request parameters and text-only rejection before screenshot upload');
 
+  const completedWording=loadedProject.blocks[0].translation;
+  let recoverImages=0,badDrafts=0,recoveredDrafts=0,holdRecognition=false,recognitionSeen=false;
+  const prepareFailure=()=>{
+    Object.assign(primaryReview,{source:'Recover GPU after a failed protection check.',translation:'',edited:false,mathSpans:[],translationNeedsRefresh:false});
+    delete primaryReview.vision;delete primaryReview.translationVisionKey;delete primaryReview.translationFailure;delete primaryReview.sourceRepairReason;
+    recognitionSeen=false;
+  };
+  uiContext.fetch=async(_url,options)=>{
+    const body=JSON.parse(options.body),content=body.messages[1].content;
+    if(Array.isArray(content)){
+      recoverImages++;recognitionSeen=true;const payload=JSON.parse(content[0].text);
+      return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({block_id:payload.block_id,kind:'body',source_text:payload.approximate_text,uncertain:holdRecognition,issues:holdRecognition?['Please verify the source.']:[]})}}]})};
+    }
+    const payload=JSON.parse(content);
+    if(!recognitionSeen){badDrafts++;return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({translation:'模拟丢失全部标记。'})}}]})};}
+    recoveredDrafts++;return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({translation:'恢复译文 '+payload.paragraph})}}]})};
+  };
+  prepareFailure();const beforeAutoRecovery=cachedSourceReads;
+  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.equal(badDrafts,3);assert.equal(recoverImages,1);assert.equal(recoveredDrafts,1);
+  assert.equal(cachedSourceReads,beforeAutoRecovery+1,'an initial protection rejection can recover through opt-in vision and reach PDF generation in one primary action');
+  assert.ok(primaryReview.translation.startsWith('恢复译文'));assert.equal(primaryReview.translationFailure,undefined);
+  assert.equal(loadedProject.blocks[0].translation,completedWording,'completed manual wording is never retried');
+  prepareFailure();holdRecognition=true;
+  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.equal(cachedSourceReads,beforeAutoRecovery+1);assert.equal(primaryReview.translation,'');assert.ok(primaryReview.translationFailure);
+  assert.match(elements.get('status').textContent,/仍需核对.*未生成 PDF/);
+  const beforeHold=[badDrafts,recoverImages,recoveredDrafts];
+  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.deepEqual([badDrafts,recoverImages,recoveredDrafts],beforeHold,'pending recognition review does not repeat paid model attempts');
+  assert.match(elements.get('status').textContent,/未重复请求模型/);
+  console.log('PASS failed-paragraph recovery: persisted validation state, opt-in vision after rejection, successful continuation, uncertain hold and no repeat requests while awaiting review');
+
   const {render,LAYOUT}=await moduleFor('src/render.ts');
   const doc=await PDFDocument.create();const page=doc.addPage([612,792]);
   const font=await doc.embedFont(StandardFonts.TimesRoman);
@@ -860,6 +898,18 @@ try {
   assert.deepEqual(placements.find(p=>p.blockID==='b13').mathExpressions,['R_1'],'vision-derived LaTeX renders in an automatic translation without obsolete SDT math bindings');
   assert.ok(!placements.find(p=>p.blockID==='b13').mathReview);assert.equal(visionBlock.source,'Use R_{1} in this paragraph.','PDF generation retains the canonical source');
   assert.ok(placements.filter(p=>p.blockID==='b13').reduce((n,p)=>n+p.height,0)>40,'multi-paragraph OCR translations retain their line breaks without missing-font errors');
+  const stacked={...project,blocks:[
+    {id:'eq12',kind:'math',source:'D = 1 (12)',translation:'',edited:false,rects:[[0,160,396.96,525.4,426.06]]},
+    {id:'eq13',kind:'math',source:'K = 1 (13)',translation:'',edited:false,rects:[[0,214,381.45,525.4,392.76]]},
+    {id:'eq14',kind:'math',source:'W = 1 (14)',translation:'',edited:false,rects:[[0,211,367.5,525.4,378.81]]}
+  ]},stackedPlacements=[];
+  await render(stacked,sourceBytes,fontBytes,false,new AbortController().signal,()=>{},{monoFontBytes:monoBytes,onPlacement:p=>stackedPlacements.push(p)});
+  for(const [i,p]of stackedPlacements.entries()){
+    const rect=stacked.blocks[i].rects[0];
+    assert.ok(p.sourceBox.bottom<=rect[2]&&p.sourceBox.top>=rect[4],'formula crops retain every source glyph and equation number');
+    if(i)assert.ok(stackedPlacements[i-1].sourceBox.bottom>=p.sourceBox.top,'closely stacked equations never share crop pixels');
+  }
+  console.log('PASS close formula crops: no adjacent-equation fragments and complete source boxes');
   const divider=LAYOUT.margin+(LAYOUT.width-2*LAYOUT.margin)*.6;
   assert.equal((divider-LAYOUT.margin)/(LAYOUT.width-2*LAYOUT.margin),.6);
   for (const line of wrapStyled(styledRuns('AReallyLongTechnicalIdentifier'.repeat(8)),font,font,11,200))

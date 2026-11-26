@@ -50,6 +50,11 @@ Closing the top-level document releases the slot; child-document unload events d
 schema major version 1. Node types, `anchor.pageRects`, flow classes, reference flags and part links
 produce a normalized `Project`. Unsupported versions, missing coordinates and rotated pages fail
 explicitly. This API requires Zotero 10 and must be revisited if host versions change.
+`proseGroups.ts` derives ownership for a body/inline-math/continuation sequence only when their
+source rectangles overlap on the same text line and the continuation shares the paragraph column.
+Stored blocks, words and coordinates stay intact. The OCR source and crop include the complete
+group; its member fingerprint participates in recognition binding. Accepted group translation is
+emitted once, and manual wording keeps established ownership unless classification is overridden.
 Protected semantic types take precedence over auxiliary flow flags: a `math` node remains a
 formula even when SDT labels it auxiliary. `upgrade.ts` reconciles refreshed metadata by source
 identity and normalized text, allowing safe keep-to-math repairs without discarding translations.
@@ -172,8 +177,12 @@ paths never replace the current source layout. No API keys are serialized.
 Batch translation only fills empty translatable blocks and runs at most three paragraph requests at
 once. Each completed paragraph is saved immediately. Exhausted paragraph-local protection errors
 remain pending while other paragraphs finish and save; the workbench reports IDs and prevents an
-incomplete PDF. Resumption only requests pending paragraphs. Network, configuration, persistence
-and other failures stop new scheduling while in-flight work can finish; cancellation aborts requests.
+incomplete PDF. Resumption only requests pending paragraphs. Validation failure records remain
+source-local, and opt-in image repair can process failed blocks. Uncertain recognition still holds
+the primary workflow before PDF generation. A higher-resolution capture revision retries old
+unresolved candidates without relaxing numeric or uncertainty checks. Network, configuration,
+persistence and other failures stop new scheduling while in-flight work can finish; cancellation
+aborts requests.
 Manual text persists across rebuilds.
 Explicit single-block retranslation overwrites that block. Changing a glossary does not invalidate
 or silently retranslate earlier human edits. New PDFs are added as new attachments, and an output
