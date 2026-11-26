@@ -55,6 +55,7 @@ export async function verifyTranslationParts(moduleFor){
     p=>({translation:p.paragraph.replace(p.protectedSlots[0].reference,'')}),
     p=>({translation:p.paragraph+' '+p.protectedSlots[0].reference}),
     p=>({translation:p.paragraph+' '+foreign}),
+    p=>({translation:p.paragraph+' '+prepared.registry.value(foreign)}),
     p=>({translation:p.paragraph+' <r9999/>'}),
     p=>({translation:3}),
     p=>({invalid:'missing translation'})

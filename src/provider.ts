@@ -415,6 +415,7 @@ Return {"terms":[{"source":"exact phrase occurring in the text","reason":"short 
   }
   private async recoverTranslationParts(block:Block,project:Project,system:string,plan:ReturnType<typeof prepareTranslation>):Promise<TranslationResult>{
     const parts=translationParts(plan.paragraph,plan.placeholders,true),drafts:string[]=[],sources:TranslationSource[]=[];
+    const protectedValues=plan.placeholders.map(t=>plan.registry.value(t));
     const key=visionFingerprint(JSON.stringify(['readable-source-1',project.source.key,project.source.hash,block.id,block.source,block.rects,block.vision?.cacheKey,block.proseGroup?.memberIDs,plan.paragraph,
       plan.placeholders.map(t=>plan.registry.value(t)),block.sourceBoldRanges,block.mathSpans,this.settings.baseURL,this.settings.model,this.settings.prompt,PROMPT_VERSION]));
     const recovery:TranslationRecovery={protocol:1,key,total:parts.length,at:now(),completed:[]};
@@ -423,7 +424,7 @@ Return {"terms":[{"source":"exact phrase occurring in the text","reason":"short 
     for(const [index,part]of parts.entries()){
       this.signal.throwIfAborted();
       const registry=plan.registry.subset(part.placeholders),cached=saved?.completed.find(p=>p.index===index);
-      if(cached&&registry.audit(cached.text).valid&&parseBoldMarkup(cached.text,part.boldCount)){
+      if(cached&&registry.audit(cached.text).valid&&!protectedTranslation(part,registry,protectedValues).assemble({translation:cached.text}).issues.length&&parseBoldMarkup(cached.text,part.boldCount)){
         drafts.push(cached.text);if(cached.source)sources.push(cached.source);recovery.completed.push(cached);continue;
       }
       const location={part:index+1,total:parts.length},sentences=translationParts(part.paragraph,part.placeholders,true,true);
@@ -432,21 +433,22 @@ Return {"terms":[{"source":"exact phrase occurring in the text","reason":"short 
       const failedBefore=block.translationFailure?.recovery?.part===index+1&&block.translationFailure.recovery.total===parts.length;
       let unit:{text:string;source?:TranslationSource}|undefined,lastError:unknown;
       if(!savedSentence&&!(failedBefore&&sentences.length>1)){
-        try{unit=await this.recoverSourceUnit(block,project,system,part,registry,location);}
+        try{unit=await this.recoverSourceUnit(block,project,system,part,registry,location,protectedValues);}
         catch(error){if(!(error instanceof TranslationProtectionError))throw error;lastError=error;}
       }
       if(!unit){
         if(sentences.length<2)throw lastError||new TranslationProtectionError(block.id,registry.audit(''),{...location,issues:['没有可安全拆分的完整句子']});
         const retained=(savedSentence?.completed||[]).filter(p=>{
-          const sentence=sentences[p.index];return sentence&&registry.subset(sentence.placeholders).audit(p.text).valid&&parseBoldMarkup(p.text,sentence.boldCount);
+          const sentence=sentences[p.index],subset=sentence&&registry.subset(sentence.placeholders);
+          return sentence&&subset.audit(p.text).valid&&!protectedTranslation(sentence,subset,protectedValues).assemble({translation:p.text}).issues.length&&parseBoldMarkup(p.text,sentence.boldCount);
         });
         recovery.sentence={part:index,key:sentenceKey,total:sentences.length,completed:retained.map(p=>({...p}))};await persist();
         const texts:string[]=[],sentenceSources:TranslationSource[]=[];
         for(const [sentenceIndex,sentence]of sentences.entries()){
           this.signal.throwIfAborted();
-          const subset=registry.subset(sentence.placeholders),previous=savedSentence?.completed.find(p=>p.index===sentenceIndex);
+          const subset=registry.subset(sentence.placeholders),previous=retained.find(p=>p.index===sentenceIndex);
           const piece=previous&&subset.audit(previous.text).valid&&parseBoldMarkup(previous.text,sentence.boldCount)?previous:
-            await this.recoverSourceUnit(block,project,system,sentence,subset,{...location,sentence:{index:sentenceIndex+1,total:sentences.length}});
+            await this.recoverSourceUnit(block,project,system,sentence,subset,{...location,sentence:{index:sentenceIndex+1,total:sentences.length}},protectedValues);
           texts.push(piece.text);if(piece.source)sentenceSources.push(piece.source);
           if(!recovery.sentence.completed.some(p=>p.index===sentenceIndex))recovery.sentence.completed.push({index:sentenceIndex,text:piece.text,...(piece.source?{source:piece.source}:{})});await persist();
         }
@@ -464,8 +466,8 @@ Return {"terms":[{"source":"exact phrase occurring in the text","reason":"short 
     const formatted=parseBoldMarkup(joined,plan.boldCount);if(!formatted)throw new Error(`${block.id} 分句合并未保留加粗范围，旧译文已保留。`);
     return translationResult(block,plan.registry.restore(formatted.text,formatted.boldRanges),combinedSource(sources));
   }
-  private async recoverSourceUnit(block:Block,project:Project,system:string,part:TranslationPart,registry:ProtectionRegistry,location:Omit<RecoveryLocation,'issues'>):Promise<{text:string;source?:TranslationSource}>{
-    const request=protectedTranslation(part,registry);let previous:unknown,issues:string[]=[];
+  private async recoverSourceUnit(block:Block,project:Project,system:string,part:TranslationPart,registry:ProtectionRegistry,location:Omit<RecoveryLocation,'issues'>,protectedValues:readonly string[]):Promise<{text:string;source?:TranslationSource}>{
+    const request=protectedTranslation(part,registry,protectedValues);let previous:unknown,issues:string[]=[];
     for(let attempt=0;attempt<2;attempt++){
       this.signal.throwIfAborted();
       const result=await this.json(system+'\n'+SLOT_INSTRUCTIONS,

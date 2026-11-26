@@ -44,6 +44,12 @@ export async function verifySentenceRecovery(moduleFor){
   };
   assert.equal((await restart.translate(resumed,project)).text,source);assert.equal(firstReplay,false);
   assert.ok(resumeSnapshots[0].sentence.completed.some(p=>p.index===0),'resume never clears already saved sentence progress before replaying it');
+  const damaged=structuredClone(checkpoint),token=fine[0].placeholders[0];
+  damaged.sentence.completed[0].text=damaged.sentence.completed[0].text.replace(token,plan.registry.value(token));
+  let repairedFirst=false;
+  restart.json=async(_system,p)=>{if(p.paragraphPart.index===1&&p.paragraphSentence?.index===1)repairedFirst=true;return echo(p);};
+  assert.equal((await restart.translate({...resumed,translationRecovery:damaged},project)).text,source);
+  assert.equal(repairedFirst,true,'a damaged sentence checkpoint is recomputed, not repaired and silently reused');
   const other={...project,source:{...project.source,key:'OTHER'}};let recomputed=false;
   restart.json=async(_system,p)=>{if(p.paragraphPart.index===1&&!p.paragraphSentence)recomputed=true;return echo(p);};
   await restart.translate(resumed,other);assert.equal(recomputed,true,'sentence checkpoints remain bound to the source paper');
