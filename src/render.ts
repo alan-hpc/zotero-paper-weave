@@ -1,6 +1,6 @@
 import { PDFDocument, PDFEmbeddedPage, PDFFont, PDFPage, rgb, StandardFonts, pushGraphicsState, popGraphicsState, rectangle, clip, endPath } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
-import { Block, Project, ListInfo, canTranslate } from './model';
+import { Block, Project, ListInfo, canTranslate,automaticOriginalMatches } from './model';
 import { StyledLine, styledRuns, withFontFallback, wrapStyled, positionLine } from './typography';
 import { bounded } from './async';
 import { translatedBoldRanges } from './formatting';
@@ -8,7 +8,7 @@ import { graphicGroups, GraphicGroup, graphicCropBox } from './graphics';
 import { listInfo, listText } from './lists';
 import { latexBox, drawLatex } from './latex';
 import { inlineMathPlan } from './mathPresentation';
-import { visionRenderBlock } from './vision';
+import { visionRenderBlock,visionCrops } from './vision';
 
 /** Design B: keep each complete source page on the left, with translation on the right. */
 export const LAYOUT = {
@@ -44,6 +44,7 @@ interface OriginalPlan {
   sourceBox: {left:number;bottom:number;right:number;top:number};
   notice?:string;
   imageHeight?:number;
+  sourcePreserved?:boolean;
 }
 type ContentPlan = TranslationPlan | OriginalPlan;
 interface TextSheetEntry {
@@ -70,6 +71,7 @@ export interface RenderPlacement {
   inlineMathSources?:number[];
   inlineMathWrapped?:number[];
   mathReview?:boolean;
+  sourcePreserved?:boolean;
 }
 export interface RenderOptions { monoFontBytes?: Uint8Array; onPlacement?:(placement:RenderPlacement)=>void }
 
@@ -84,7 +86,7 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
   options: RenderOptions = {}): Promise<Uint8Array> {
   const graphics=graphicGroups(project),byAnchor=new Map<string,GraphicGroup[]>();
   const graphicMembers=new Set(graphics.flatMap(group=>group.blockIDs));
-  const incomplete = project.blocks.filter(b => canTranslate(b) && !graphicMembers.has(b.id) && !b.translation.trim());
+  const incomplete = project.blocks.filter(b => canTranslate(b) && !automaticOriginalMatches(project,b) && !graphicMembers.has(b.id) && !b.translation.trim());
   if (incomplete.length) throw new Error(`还有 ${incomplete.length} 段未翻译。请完成翻译，或将这些段落设为「保留英文」。`);
   signal.throwIfAborted();
   const source = await PDFDocument.load(sourceBytes);
@@ -123,6 +125,18 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
         image,width:imageWidth*scale,height:imageHeight*scale,sourceBox:box});
     }
     if(graphicMembers.has(block.id)&&!block.kindEdited)continue;
+    if(automaticOriginalMatches(project,savedBlock)){
+      for(const region of visionCrops(project,savedBlock)){
+        const pageIndex=region.pageIndex,crop=pageCrop(source.getPage(pageIndex));
+        const box={left:Math.max(crop.left,region.box.left),bottom:Math.max(crop.bottom,region.box.bottom),right:Math.min(crop.right,region.box.right),top:Math.min(crop.top,region.box.top)};
+        if(!(box.right>box.left&&box.top>box.bottom))throw new Error(`${block.id} 的自动原文保留范围无效。`);
+        const image=await embeddedPage(pageIndex),imageWidth=box.right-box.left,imageHeight=box.top-box.bottom;
+        const scale=Math.min((ZW-24)/imageWidth,(TEXT_HEIGHT-20-GAP*2)/imageHeight,1);
+        plansByPage[pageIndex].push({kind:'formula',block,blockIDs:[block.id],image,width:imageWidth*scale,height:imageHeight*scale+20,imageHeight:imageHeight*scale,sourceBox:box,
+          sourcePreserved:true,notice:`${block.id} 自动复查未确认，保留原文；已有译文保存在项目中。`});
+      }
+      continue;
+    }
     const sourcePage=block.rects[0]?.[0];
     if ((!canTranslate(block) && block.kind!=='math') || block.rects.length===0) continue;
     if (!Number.isInteger(sourcePage) || sourcePage! < 0 || sourcePage! >= plansByPage.length) {
@@ -282,7 +296,7 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
         options.onPlacement?.({kind:plan.kind,blockID:plan.block.id,blockIDs:plan.blockIDs,groupLabel:plan.groupLabel,
           sourcePage:sheet.sourcePage,pageIndex:sheetIndex,
           x:ZX+(ZW-plan.width)/2,y:cursor-plan.height,width:plan.width,height:plan.height,
-          continued:sheet.continuation>0,sourceBox:plan.sourceBox,mathReview:!!plan.notice});
+          continued:sheet.continuation>0,sourceBox:plan.sourceBox,mathReview:!!plan.notice&&!plan.sourcePreserved,sourcePreserved:plan.sourcePreserved});
         cursor-=plan.height+GAP;
         continue;
       }

@@ -26,6 +26,8 @@ try {
   await verifyStructureRepair(moduleFor);
   const {verifyReviewClassification}=await import('./review-classification-regression.mjs');
   await verifyReviewClassification(moduleFor);
+  const {verifyAutomaticReview}=await import('./automatic-review-regression.mjs');
+  await verifyAutomaticReview(moduleFor);
   const {verifyVision}=await import('./vision-regression.mjs');
   await verifyVision(moduleFor);
   const {verifyProtection}=await import('./protection-regression.mjs');
@@ -550,7 +552,7 @@ try {
   assert.equal(elements.get('deepseek-model').value,'deepseek-flash');
   assert.equal(elements.get('deepseek-enabled').checked,true);
   assert.equal(elements.get('codex-enabled').checked,false);
-  assert.equal(elements.get('status').textContent,'已载入 0 个区域；请先复核分类。');
+  assert.equal(elements.get('status').textContent,'已载入 0 个区域；点击「翻译并生成 PDF」自动处理。');
   assert.equal(typeof uiWindow.paperWeaveBeforeShutdown,'function');
   const profileRoot=elements.get('provider-list'),moveProfile=profileRoot.insertBefore;
   let profileMoves=0;
@@ -664,9 +666,9 @@ try {
   bridge.saveSettings=async value=>{storedUISettings=value;};
   loadedProject.pages=[{viewRect:[0,0,612,792]}];
   let imageRequests=0,visionCalls=0,afterVisionCalls=0;
-  bridge.visionImages=async(_item,p,id)=>{
+  bridge.visionImages=async(_item,p,id,_signal,_progress,mode)=>{
     imageRequests++;const b=p.blocks.find(b=>b.id===id),dataURL='data:image/png;base64,'+Buffer.from(pngBytes).toString('base64');
-    return visionTools.visionCrops(p,b).map(r=>({...r,dataURL,fingerprint:visionTools.visionFingerprint(dataURL)}));
+    return visionTools.visionCrops(p,b,mode).map(r=>({...r,dataURL,fingerprint:visionTools.visionFingerprint(dataURL)}));
   };
   uiContext.fetch=async(_url,options)=>{
     const body=JSON.parse(options.body),content=body.messages[1].content;
@@ -705,12 +707,33 @@ try {
 
   // The primary action must repair a complete cached translation before export,
   // including math that the old review filter only discovered during rendering.
+  // From here onward exercise the complete renderer and attachment bridge,
+  // rather than the earlier source-reader sentinel used by isolated unit tests.
+  const automaticSource=await PDFDocument.create();
+  const automaticPage=automaticSource.addPage([612,792]);
+  automaticPage.drawText('Use x in this paragraph.',{x:40,y:650,size:12,font:await automaticSource.embedFont(StandardFonts.Helvetica)});
+  const automaticSourceBytes=await automaticSource.save();
+  const automaticFont=new Uint8Array(await readFile('addon/chrome/content/fonts/NotoSerifSC-Regular.ttf'));
+  const automaticMono=new Uint8Array(await readFile('addon/chrome/content/fonts/SarasaMonoSC-Regular.ttf'));
+  let automaticAttachments=0,latestAutomaticPDF;
+  bridge.sourceBytes=async()=>{cachedSourceReads++;return automaticSourceBytes;};
+  bridge.fontBytes=async()=>automaticFont;bridge.monoFontBytes=async()=>automaticMono;
+  bridge.attachPDF=async(_item,_project,bytes)=>{
+    latestAutomaticPDF=new Uint8Array(bytes);
+    assert.ok((await PDFDocument.load(latestAutomaticPDF)).getPageCount()>=1,'automatic workflow creates a valid PDF before attachment');
+    automaticAttachments++;return{preferredSet:false};
+  };
+  const waitAutomaticTask=async()=>{
+    await new Promise(r=>setTimeout(r,0));const deadline=Date.now()+45000;
+    while(elements.get('task-progress').attributes.get('data-busy')==='true'&&Date.now()<deadline)await new Promise(r=>setTimeout(r,10));
+    assert.equal(elements.get('task-progress').attributes.get('data-busy'),'false','automatic task finishes within its test deadline');
+  };
   loadedProject.blocks.splice(5);
   const primaryReview=loadedProject.blocks[3];
   const resetPrimaryReview=()=>{
     Object.assign(primaryReview,{source:'Use ∑x in this paragraph.',translation:'旧译文使用 ∑x。',edited:false,translationNeedsRefresh:false,
       mathSpans:[{start:4,end:6,representation:'source',rects:[[0,100,640,120,655]],fontSize:10,baselines:[642],features:['symbol'],reason:'fixture'}]});
-    delete primaryReview.vision;delete primaryReview.translationVisionKey;delete primaryReview.sourceRepairReason;delete primaryReview.translationMathRefs;
+    delete primaryReview.automaticOriginal;delete primaryReview.vision;delete primaryReview.translationVisionKey;delete primaryReview.sourceRepairReason;delete primaryReview.translationMathRefs;
   };
   resetPrimaryReview();let uncertainPrimary=false;
   uiContext.fetch=async(_url,options)=>{
@@ -723,29 +746,33 @@ try {
     return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({translation:'主按钮图片修复译文 '+payload.paragraph})}}]})};
   };
   const primaryVisionBefore=visionCalls;
-  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  elements.get('start').listeners.get('click')();await waitAutomaticTask();
   assert.equal(visionCalls,primaryVisionBefore+1,'primary action recognizes unsupported math before PDF generation even with a full translation cache');
   assert.equal(primaryReview.translationVisionKey,primaryReview.vision.cacheKey);
   assert.ok(primaryReview.translation.startsWith('主按钮图片修复译文'));
   assert.equal(cachedSourceReads,3,'successful recognition and translation reach PDF generation');
   assert.equal(loadedProject.blocks[0].translation,'人工修订后的译文。');assert.equal(loadedProject.blocks[0].edited,true);
   resetPrimaryReview();uncertainPrimary=true;
-  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
-  assert.equal(cachedSourceReads,3,'uncertain recognition stops before producing another unchanged fallback PDF');
+  elements.get('start').listeners.get('click')();await waitAutomaticTask();
+  assert.equal(cachedSourceReads,4,'uncertain recognition completes automatically using explicit source preservation');
   assert.equal(primaryReview.translation,'旧译文使用 ∑x。');assert.equal(primaryReview.vision.active,false);
-  assert.equal(elements.get('filter').value,'math-review');assert.equal(elements.get('vision-panel').open,true);
-  assert.match(elements.get('status').textContent,/仍需核对.*未生成 PDF/);
+  assert.ok(primaryReview.automaticOriginal);assert.match(primaryReview.automaticOriginal.reason,/Check the summation boundary/u);
+  assert.match(elements.get('status').textContent,/PDF 已生成.*保留原文图像/);
+  assert.equal(automaticAttachments,2,'both successful repair and uncertain source preservation produce real attachments');
+  assert.ok(latestAutomaticPDF.length>1000);
   const explicitVisionBefore=visionCalls;
-  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
-  assert.equal(visionCalls,explicitVisionBefore,'current-version uncertain OCR stays reviewable without repeated uploads');
-  assert.match(elements.get('status').textContent,/Check the summation boundary/u,'the export hold displays its concrete reason');
-  elements.get('vision-apply').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
-  assert.equal(primaryReview.vision.active,true);
-  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
-  assert.equal(visionCalls,explicitVisionBefore,'a retry uses explicitly adopted recognition rather than rejecting its original uncertainty again');
-  assert.equal(primaryReview.translationVisionKey,primaryReview.vision.cacheKey);assert.equal(cachedSourceReads,4);
-  assert.equal(primaryReview.vision.issues.length,1,'user adoption retains the original recognition issue for provenance');
-  console.log('PASS primary vision workflow: full cached PDF repair, shared review detection, manual revisions, uncertain-result hold and explicit-adoption resume');
+  elements.get('start').listeners.get('click')();await waitAutomaticTask();
+  assert.equal(visionCalls,explicitVisionBefore,'completed automatic decisions do not repeat paid image attempts');
+  assert.equal(cachedSourceReads,5,'preserved regions render again without human confirmation');
+  elements.get('filter').value='all';elements.get('filter').listeners.get('change')();
+  elements.get('block-list').children[loadedProject.blocks.indexOf(primaryReview)].listeners.get('click')();
+  elements.get('vision-apply').listeners.get('click')();await waitAutomaticTask();
+  assert.equal(primaryReview.vision.active,true);assert.equal(primaryReview.automaticOriginal,undefined);
+  elements.get('start').listeners.get('click')();await waitAutomaticTask();
+  assert.equal(visionCalls,explicitVisionBefore,'optional explicit adoption still uses saved recognition');
+  assert.equal(primaryReview.translationVisionKey,primaryReview.vision.cacheKey);assert.equal(cachedSourceReads,6);
+  assert.equal(primaryReview.vision.issues.length,1,'optional adoption retains provenance');
+  console.log('PASS automatic primary workflow: cached repair, bounded uncertainty recovery, explicit source preservation, PDF completion without confirmation, cached resume and optional manual editing');
 
   const routeRequests=[];
   uiContext.fetch=async(url,options)=>{
@@ -763,18 +790,18 @@ try {
   elements.get('codex-enabled').checked=true;elements.get('deepseek-enabled').checked=false;
   elements.get('codex-base').value='http://127.0.0.1:47771/v1';elements.get('codex-model').value='gpt-6-luna';
   resetPrimaryReview();
-  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  elements.get('start').listeners.get('click')();await waitAutomaticTask();
   assert.ok(routeRequests.some(r=>r.image));assert.ok(routeRequests.every(r=>r.url==='http://127.0.0.1:47771/v1/chat/completions'&&r.model==='gpt-6-luna'));
   assert.equal(primaryReview.vision.model,'gpt-6-luna');assert.equal(primaryReview.translatedWith.provider,'codex');
   elements.get('codex-enabled').checked=false;elements.get('custom-enabled').checked=true;
   elements.get('base').value='https://vision.example.test/v1';elements.get('model').value='account-vision-model';
   resetPrimaryReview();routeRequests.length=0;
-  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  elements.get('start').listeners.get('click')();await waitAutomaticTask();
   assert.ok(routeRequests.some(r=>r.image));assert.ok(routeRequests.every(r=>r.url==='https://vision.example.test/v1/chat/completions'&&r.model==='account-vision-model'));
   assert.equal(primaryReview.vision.model,'account-vision-model');
   elements.get('custom-enabled').checked=false;elements.get('codex-enabled').checked=true;elements.get('deepseek-enabled').checked=true;
   elements.get('auto-fallback').checked=true;elements.get('deepseek-model').value='deepseek-flash';
-  elements.get('codex-up').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  elements.get('codex-up').listeners.get('click')();await waitAutomaticTask();
   resetPrimaryReview();primaryReview.translation='';routeRequests.length=0;
   uiContext.fetch=async(url,options)=>{
     const body=JSON.parse(options.body),content=body.messages[1].content;routeRequests.push({url,model:body.model,image:Array.isArray(content)});
@@ -784,13 +811,13 @@ try {
     }
     const payload=JSON.parse(content);return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({translation:'额度切换后的译文 '+payload.paragraph})}}]})};
   };
-  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  elements.get('start').listeners.get('click')();await waitAutomaticTask();
   assert.equal(routeRequests.filter(r=>r.url.startsWith('http://127.0.0.1:47771')).length,1,'the primary text provider is not retried after quota switches the task');
   assert.ok(routeRequests.some(r=>r.image&&r.model==='deepseek-flash'),'vision uses the effective provider after the text quota switch');
   assert.equal(primaryReview.vision.model,'deepseek-flash');assert.equal(primaryReview.translatedWith.provider,'deepseek');
   elements.get('codex-enabled').checked=false;elements.get('deepseek-model').value='deepseek-chat';
   resetPrimaryReview();routeRequests.length=0;const screenshotsBeforeUnsupported=imageRequests;
-  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  elements.get('start').listeners.get('click')();await waitAutomaticTask();
   assert.equal(routeRequests.length,0);assert.equal(imageRequests,screenshotsBeforeUnsupported);
   assert.match(elements.get('status').textContent,/当前模型 deepseek-chat 不支持图片输入/);
   elements.get('deepseek-model').value='deepseek-flash';
@@ -800,7 +827,7 @@ try {
   let recoverImages=0,badDrafts=0,recoveredDrafts=0,holdRecognition=false,recognitionSeen=false;
   const prepareFailure=()=>{
     Object.assign(primaryReview,{source:'Recover GPU after a failed protection check.',translation:'',edited:false,mathSpans:[],translationNeedsRefresh:false});
-    delete primaryReview.vision;delete primaryReview.translationVisionKey;delete primaryReview.translationFailure;delete primaryReview.sourceRepairReason;
+    delete primaryReview.automaticOriginal;delete primaryReview.vision;delete primaryReview.translationVisionKey;delete primaryReview.translationFailure;delete primaryReview.sourceRepairReason;
     recognitionSeen=false;
   };
   uiContext.fetch=async(_url,options)=>{
@@ -814,29 +841,29 @@ try {
     recoveredDrafts++;return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({translation:'恢复译文 '+payload.paragraph})}}]})};
   };
   prepareFailure();const beforeAutoRecovery=cachedSourceReads;
-  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  elements.get('start').listeners.get('click')();await waitAutomaticTask();
   assert.equal(badDrafts,5);assert.equal(recoverImages,1);assert.equal(recoveredDrafts,1);
   assert.equal(cachedSourceReads,beforeAutoRecovery+1,'an initial protection rejection can recover through opt-in vision and reach PDF generation in one primary action');
   assert.ok(primaryReview.translation.includes('恢复译文'));assert.equal(primaryReview.translationFailure,undefined);
   assert.equal(loadedProject.blocks[0].translation,completedWording,'completed manual wording is never retried');
   prepareFailure();holdRecognition=true;
-  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
-  assert.equal(cachedSourceReads,beforeAutoRecovery+1);assert.equal(primaryReview.translation,'');assert.ok(primaryReview.translationFailure);
-  assert.match(elements.get('status').textContent,/仍需核对.*未生成 PDF/);
+  elements.get('start').listeners.get('click')();await waitAutomaticTask();
+  assert.equal(cachedSourceReads,beforeAutoRecovery+2);assert.equal(primaryReview.translation,'');assert.ok(primaryReview.translationFailure);assert.ok(primaryReview.automaticOriginal);
+  assert.match(elements.get('status').textContent,/PDF 已生成.*无需逐段确认/);
   const beforeHold=[badDrafts,recoverImages,recoveredDrafts];
-  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
-  assert.deepEqual([badDrafts,recoverImages,recoveredDrafts],beforeHold,'pending recognition review does not repeat paid model attempts');
-  assert.match(elements.get('status').textContent,/未重复请求模型/);
-  console.log('PASS failed-paragraph recovery: persisted validation state, opt-in vision after rejection, successful continuation, uncertain hold and no repeat requests while awaiting review');
+  elements.get('start').listeners.get('click')();await waitAutomaticTask();
+  assert.deepEqual([badDrafts,recoverImages,recoveredDrafts],beforeHold,'automatic source preservation does not repeat paid model attempts');
+  assert.match(elements.get('status').textContent,/PDF 已生成.*无需逐段确认/);
+  console.log('PASS failed-paragraph recovery: persisted validation state, opt-in vision after rejection, successful continuation, automatic completion with uncertain source preservation and no repeated requests');
 
   prepareFailure();holdRecognition=false;
   elements.get('filter').value='all';elements.get('filter').listeners.get('change')();elements.get('block-list').children[loadedProject.blocks.indexOf(primaryReview)].listeners.get('click')();
   let selectedRetries=0;
   uiContext.fetch=async()=>{selectedRetries++;return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({translation:'省略了所有保护项。'})}}]})};};
-  elements.get('retranslate').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  elements.get('retranslate').listeners.get('click')();await waitAutomaticTask();
   assert.equal(selectedRetries,5);assert.ok(primaryReview.translationFailure.recovery,'selected retranslation persists the same detailed recovery state as batch translation');
   uiContext.fetch=async(_url,options)=>{selectedRetries++;const p=JSON.parse(JSON.parse(options.body).messages[1].content);assert.ok(p.protectedSlots,'selected retry enters the saved recovery path directly');return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({translation:'继续 '+p.paragraph})}}]})};};
-  elements.get('retranslate').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  elements.get('retranslate').listeners.get('click')();await waitAutomaticTask();
   assert.equal(selectedRetries,6);assert.equal(primaryReview.translationFailure,undefined);assert.equal(primaryReview.translationRecovery,undefined);
   assert.equal(loadedProject.blocks[0].translation,completedWording);console.log('PASS selected retranslation: persist precise failure stage, resume without repeating whole-paragraph attempts, clear recovery only on success and retain unrelated manual wording');
 
@@ -876,6 +903,10 @@ try {
     {baseURL:'https://api.deepseek.com/v1',model:'deepseek-flash',prompt:''},project,visionBlock,
     visionTools.visionCrops(project,visionBlock).map(r=>({...r,dataURL:visionURL,fingerprint:visionTools.visionFingerprint(visionURL)})),new AbortController().signal);
   visionTools.activateVision(project,visionBlock);visionBlock.translationVisionKey=visionBlock.vision.cacheKey;
+  const {blockInputKey}=await moduleFor('src/model.ts');
+  const automaticOriginal=mathCase('b14',285,'');project.blocks.push(automaticOriginal);
+  automaticOriginal.automaticOriginal={version:1,libraryID:1,sourceKey:'SOURCE01',sourceHash:'synthetic',inputKey:blockInputKey(automaticOriginal),
+    reason:'Ambiguous source after two bounded image passes.',at:new Date().toISOString(),model:'test-vision',evidence:[visionTools.visionFingerprint(visionURL)]};
   const sourceBytes=await doc.save(),fontBytes=new Uint8Array(await readFile('addon/chrome/content/fonts/NotoSerifSC-Regular.ttf'));
   const monoBytes=new Uint8Array(await readFile('addon/chrome/content/fonts/SarasaMonoSC-Regular.ttf'));
   const fontkit=(await import('@pdf-lib/fontkit')).default;
@@ -924,6 +955,12 @@ try {
   assert.deepEqual(placements.find(p=>p.blockID==='b12').mathExpressions,['R_{1}'],'source line wraps cannot imitate a fraction in linear mathematical typesetting');
   assert.deepEqual(placements.find(p=>p.blockID==='b13').mathExpressions,['R_1'],'vision-derived LaTeX renders in an automatic translation without obsolete SDT math bindings');
   assert.ok(!placements.find(p=>p.blockID==='b13').mathReview);assert.equal(visionBlock.source,'Use R_{1} in this paragraph.','PDF generation retains the canonical source');
+  const automaticallyPreserved=placements.find(p=>p.blockID==='b14');
+  assert.equal(automaticallyPreserved.sourcePreserved,true);assert.equal(automaticallyPreserved.mathReview,false);
+  assert.equal(automaticallyPreserved.kind,'formula');assert.ok(automaticallyPreserved.sourceBox.bottom<=278&&automaticallyPreserved.sourceBox.top>=298,'original preservation includes the complete source region');
+  assert.equal(automaticOriginal.translation,'','preservation never invents Chinese or clears uncertainty to pass the incomplete guard');
+  const staleOriginal=structuredClone(project);staleOriginal.blocks.at(-1).source+=' Changed.';
+  await assert.rejects(render(staleOriginal,sourceBytes,fontBytes,false,new AbortController().signal,()=>{}),/未翻译/,'stale source receipts cannot bypass incomplete translation validation');
   assert.ok(placements.filter(p=>p.blockID==='b13').reduce((n,p)=>n+p.height,0)>40,'multi-paragraph OCR translations retain their line breaks without missing-font errors');
   const stacked={...project,blocks:[
     {id:'eq12',kind:'math',source:'D = 1 (12)',translation:'',edited:false,rects:[[0,160,396.96,525.4,426.06]]},

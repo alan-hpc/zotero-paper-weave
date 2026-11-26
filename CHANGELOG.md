@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-alpha.49
+
+- Replace opt-in automatic review's human-confirmation holds with bounded source-bound completion. Re-read diagnostics, add owned high-resolution math details, adopt only validated prose and retranslate with existing protection checks. Persist explicit original-preservation receipts for content that remains uncertain; render the corresponding complete source region and retain old Chinese and diagnostics. Service, identity, disk and cancellation failures remain errors.
+- Extend trusted algorithms through physically supported phase labels without swallowing narrative/manual boundaries. DistMoE Algorithm 1 now retains its title, Stage-I, Stage-II, inference and all 42 steps as one original region rather than nine failed paragraph reviews.
+- Fix valid LaTeX log/sin/cos/exp rejection: MathJax's invisible function-application/operator glyphs have intentionally empty paths. Omit only those no-ink outlines, retaining all visible glyphs, SVG metrics and strict malformed-path rejection. Include the exact failing expression and diagnostic in OCR rereads.
+- Version paragraph/detail requests separately, retain adopted/manual source layers, validate/cache source-preservation provenance, invalidate stale/foreign decisions and clear affected decisions on edits or successful translation. Display processed/translated/preserved counts without asking for per-paragraph approval.
+- Exercise real PDFs through the workbench attachment bridge in regressions, including uncertain completion and cached restart. In an isolated 501-region DistMoE copy, the current local Codex gpt-6-luna completed b59 with one image request and one translation; all other saved wording stayed unchanged. Generate a 56-page PDF with zero unresolved or automatically preserved prose regions; inspect b59 mathematics and the complete algorithm. No live Zotero cache writes or native installation acceptance.
+
 ## 0.1.0-alpha.48
 
 - Recover a failed source-bound sentence group at complete-sentence granularity instead of repeating the same oversized group. Preserve group checkpoints and add source/configuration-bound sentence checkpoints; resume only missing validated units after cancellation, failure or restart.

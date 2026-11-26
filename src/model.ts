@@ -1,4 +1,5 @@
 import type {VisionRecord} from './vision';
+import {fingerprint} from './fingerprint';
 export type Kind = 'body' | 'heading' | 'figure' | 'caption' | 'table' | 'math' | 'code' | 'reference' | 'keep';
 /** PDF user space: origin bottom left; [pageIndex, x0, y0, x1, y1]. */
 export type Rect = [number, number, number, number, number];
@@ -34,6 +35,8 @@ export interface Block {
   sourceRepairReason?: string;
   vision?:VisionRecord;
   visionHistory?:VisionRecord[];
+  /** Explicit terminal content decision after bounded automatic recovery; wording is retained. */
+  automaticOriginal?:{version:1;libraryID:number;sourceKey:string;sourceHash:string;inputKey:string;reason:string;at:string;model:string;evidence:string[]};
   translationVisionKey?:string;
   proseGroup?:{memberIDs:string[];source:string;rects:Rect[]};
   proseGroupAnchor?:string;
@@ -99,6 +102,11 @@ export const PROMPT_VERSION = '10';
 export const EXTRACTION_VERSION = 11;
 export const canTranslate = (b: Block) => (b.kind === 'body' || b.kind === 'heading') && (!b.originalGraphic || !!b.kindEdited)&&(!b.proseGroupAnchor||!!b.kindEdited);
 export const now = () => new Date().toISOString();
+export const blockInputKey=(b:Block)=>fingerprint(JSON.stringify([b.id,b.source,b.rects,...(b.proseGroup?[b.proseGroup]:[])]));
+export function automaticOriginalMatches(project:Project,b:Block):boolean {
+  const r=b.automaticOriginal;
+  return !!r&&!b.edited&&r.version===1&&r.libraryID===project.source.libraryID&&r.sourceKey===project.source.key&&r.sourceHash===project.source.hash&&r.inputKey===blockInputKey(b);
+}
 const validPieces=(pieces:RecoveryPiece[],total:number)=>Array.isArray(pieces)&&pieces.length<=total&&
   new Set(pieces.map(p=>p.index)).size===pieces.length&&!pieces.some(p=>!Number.isInteger(p.index)||p.index<0||p.index>=total||typeof p.text!=='string'||!p.text.trim()||p.text.length>26000||
     p.source&&(typeof p.source.model!=='string'||p.source.model.length>400||p.source.provider!==undefined&&!['codex','deepseek','custom'].includes(p.source.provider)));
@@ -154,9 +162,16 @@ export function validateProject(p: unknown): asserts p is Project {
       }
     }
     if(b.translationVisionKey!==undefined&&!/^[a-f0-9]{16}$/u.test(b.translationVisionKey))throw new Error('图片识别译文绑定无效。');
+    if(b.automaticOriginal){const r=b.automaticOriginal;
+      if(r.version!==1||r.libraryID!==a.source.libraryID||r.sourceKey!==a.source.key||r.sourceHash!==a.source.hash||
+        !/^[a-f0-9]{16}$/u.test(r.inputKey)||typeof r.reason!=='string'||!r.reason.trim()||r.reason.length>1500||
+        typeof r.at!=='string'||!Number.isFinite(Date.parse(r.at))||typeof r.model!=='string'||r.model.length>400||
+        !Array.isArray(r.evidence)||!r.evidence.length||r.evidence.length>12||r.evidence.some(s=>!/^[a-f0-9]{16}$/u.test(s)))
+        throw new Error('自动保留原文记录与论文不匹配或格式无效。');
+    }
     if(b.visionHistory!==undefined&&(!Array.isArray(b.visionHistory)||b.visionHistory.length>3))throw new Error('图片识别历史格式无效。');
     for(const v of [...(b.visionHistory||[]),...(b.vision?[b.vision]:[])]){
-      if(v.recognitionVersion!==undefined&&![2,3,4].includes(v.recognitionVersion))throw new Error('图片识别流程版本无效。');
+      if(v.recognitionVersion!==undefined&&![2,3,4,5].includes(v.recognitionVersion))throw new Error('图片识别流程版本无效。');
       if(v.sourceStyleRestored!==undefined&&typeof v.sourceStyleRestored!=='boolean')throw new Error('数学样式修复记录无效。');
       if(v.protocol!==1||v.sourceHash!==a.source.hash||v.sourceKey!==a.source.key||v.blockID!==b.id||
         ![v.cacheKey,v.requestKey,v.inputKey,v.blockKey].every(s=>typeof s==='string'&&/^[a-f0-9]{16}$/u.test(s))||

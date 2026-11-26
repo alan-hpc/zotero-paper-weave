@@ -296,7 +296,7 @@ export class Provider {
             await retry('format',undefined,Math.min(options.retryDelayMS??500,500));
             continue;
           }
-          throw new Error(`${requestId} 模型多次未返回可解析的 JSON。该段尚未保存，可再次重试。`);
+          throw Object.assign(new Error(`${requestId} 模型多次未返回可解析的 JSON。该段尚未保存，可再次重试。`),{code:'PW_MODEL_RESPONSE_INVALID'});
         }
       } catch (e) {
         this.signal.throwIfAborted();
@@ -491,6 +491,7 @@ export interface RequestProgress {
   provider?:ProviderName;
 }
 export function recordTranslation(b: Block, result: TranslationResult, settings: Settings) {
+  delete b.automaticOriginal;
   b.translation = result.text; b.translationBoldRanges=result.boldRanges;
   b.translationMathRefs=result.mathRefs;
   b.edited = false; b.translationNeedsRefresh = false;delete b.sourceRepairReason;delete b.translationFailure;delete b.translationRecovery;

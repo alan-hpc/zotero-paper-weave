@@ -19,12 +19,15 @@ export async function verifySvgCurves(moduleFor){
     assert.ok(cubic.every((n,j)=>Math.abs(n-quadratic(t)[j])<1e-10));
   }
   for(const tex of [String.raw`(e,r)`,String.raw`m^s(e,r)`,String.raw`rem^E(e,r)=r`,String.raw`\Gamma_r^{DP}=\{(e,r)\mid e\in[0,E)\}`,
-    String.raw`\left(\frac{x}{y}\right)`,String.raw`\begin{pmatrix}a&b\\c&d\end{pmatrix}`,String.raw`\sqrt{x^2+y^2}`,String.raw`\sum_{i=0}^{N}e^{x_i}`]){
+    String.raw`\left(\frac{x}{y}\right)`,String.raw`\begin{pmatrix}a&b\\c&d\end{pmatrix}`,String.raw`\sqrt{x^2+y^2}`,String.raw`\sum_{i=0}^{N}e^{x_i}`,
+    String.raw`\log(x)`,String.raw`\sin(x)+\cos(x)+\exp(y)`,
+    String.raw`\ell_m(\mathbf{x}) = g_m(\mathbf{x}) - g_{\mathrm{pub},m}(\mathbf{x}) = \log(\alpha_m/\alpha_{\mathrm{pub}})`]){
     const box=latexBox(tex);assert.ok(box.shapes.length);assert.ok(box.width>0&&box.ascent+box.descent>0);
     const paths=[];
     drawLatex({pushOperators(){},drawSvgPath(path){paths.push(path);}},tex,10,20,12,{type:'RGB',red:0,green:0,blue:0});
     assert.equal(paths.length,box.shapes.length);
     assert.ok(paths.every(p=>!/[QqTtSs]/u.test(p)),'all smooth/quadratic glyph curves reach PDF as explicit cubic paths');
   }
-  console.log('PASS mathematical glyph outlines: exact quadratic conversion, smooth-control reflection, relative/repeated paths, contour closure, malformed-data rejection and parentheses/letters/fractions/matrices');
+  assert.throws(()=>latexBox(''),/为空/);assert.throws(()=>latexBox('\u2061'),/图形尺寸/,'an all-invisible formula cannot masquerade as a rendered expression');
+  console.log('PASS mathematical glyph outlines: exact curves, strict malformed paths, parentheses/fractions/matrices, invisible function operators, log/sin/cos/exp and DistMoE routing log odds');
 }

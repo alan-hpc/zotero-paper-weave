@@ -42,7 +42,14 @@ export function latexBox(tex:string):LatexBox {
   const visit=(element:any,matrix:Matrix,root=false)=>{
     const kind=adaptor.kind(element);if(kind==='#text')return;
     const next=root?matrix:multiply(matrix,transform(adaptor.getAttribute(element,'transform')||''));
-    if(kind==='path')shapes.push({path:cubicSvgPath(adaptor.getAttribute(element,'d')),matrix:next});
+    if(kind==='path'){
+      const path=adaptor.getAttribute(element,'d');
+      // MathJax emits empty outlines for Unicode invisible function application,
+      // multiplication, separator and plus. Their layout is already in the SVG
+      // transforms; they have no ink. Empty visible glyphs must still fail.
+      if(!path&&/^206[1-4]$/u.test(adaptor.getAttribute(element,'data-c')||''))return;
+      shapes.push({path:cubicSvgPath(path),matrix:next});
+    }
     else if(kind==='rect'){
       const x=Number(adaptor.getAttribute(element,'x')||0),y=Number(adaptor.getAttribute(element,'y')||0),w=Number(adaptor.getAttribute(element,'width')),h=Number(adaptor.getAttribute(element,'height'));
       shapes.push({path:`M${x} ${y}h${w}v${h}h${-w}Z`,matrix:next});

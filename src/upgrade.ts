@@ -1,4 +1,4 @@
-import { Block, Project, EXTRACTION_VERSION } from './model';
+import { Block, Project, EXTRACTION_VERSION,automaticOriginalMatches } from './model';
 import { translatedBoldRanges } from './formatting';
 import { withoutListMarkers } from './lists';
 import { inlineIdentity, SCRIPT_EXPRESSION, rebaseMathRefs, mathReviewRequired } from './inlineMath';
@@ -32,6 +32,8 @@ export function reconcileExtraction(existing:Project,refreshed:Project):boolean 
       translationMathRefs:rebaseMathRefs(old,fresh),
       translationBoldRanges:old.translationBoldRanges};
     block.vision=rebindVisionWhitespace(existing,old,fresh);block.visionHistory=old.visionHistory;block.translationVisionKey=old.translationVisionKey;
+    delete block.automaticOriginal;
+    if(automaticOriginalMatches(existing,{...block,automaticOriginal:old.automaticOriginal}))block.automaticOriginal=old.automaticOriginal;
     if(old.source===fresh.source){block.translationFailure=old.translationFailure;block.translationRecovery=old.translationRecovery;}
     block.translationBoldRanges=translatedBoldRanges(block);
     const inlineMath=block.preserveSource&&/[∈∉=≈≠≤≥×÷±∑√∫⁰-⁹₀-₉\u02B0-\u02FF\u2070-\u209F\u1D2C-\u1D6A]/u.test(block.source);

@@ -264,6 +264,7 @@ export async function importProject(window: any, item: any, current: Project) {
     block.translationBoldRanges = edit.translationBoldRanges;
     block.translationMathRefs=rebaseMathRefs(edit,block);
     block.edited = true; block.translatedWith = edit.translatedWith;
+    delete block.automaticOriginal;
     if(edit.vision&&visionMatches(current,{...block,vision:edit.vision}))block.vision=edit.vision;
     block.translationVisionKey=edit.translationVisionKey&&edit.translationVisionKey===block.vision?.cacheKey?edit.translationVisionKey:undefined;
     if(edit.translationVisionKey&&!block.translationVisionKey){block.translationNeedsRefresh=true;block.sourceRepairReason='导入译文来自另一版图片识别，请对照原文复核。';}
@@ -306,7 +307,7 @@ function createWorkbenchBridge(item:any,sessionID:string){
     },
     saveProject:async(project:Project)=>{await checkProject(project);await saveProject(project);},
     sourceBytes:async(requested:any,project:Project)=>{checkItem(requested);await checkProject(project);return sourceBytes(item,project);},
-    visionImages:async(requested:any,project:Project,blockID:string,signal:AbortSignal,progress:(s:string)=>void)=>{
+    visionImages:async(requested:any,project:Project,blockID:string,signal:AbortSignal,progress:(s:string)=>void,mode:'paragraph'|'context'='paragraph')=>{
       checkItem(requested);await checkProject(project);signal.throwIfAborted();
       const block=project.blocks.find(b=>b.id===blockID);
       if(!block)throw new Error('目标段落已不存在。');
@@ -316,7 +317,7 @@ function createWorkbenchBridge(item:any,sessionID:string){
       const images=await captureVisionImages(project,block,drawVision,{
         read:async key=>{try{return copyBytes(await IOUtils.read(PathUtils.join(folder,key+'.png')),(value,target)=>Cu.cloneInto(value,target));}catch(e:any){if(e.name==='NotFoundError')return null;throw e;}},
         write:async(key,bytes)=>{signal.throwIfAborted();await IOUtils.write(PathUtils.join(folder,key+'.png'),Cu.cloneInto(bytes,IOUtils),{permissions:0o600});}
-      },signal,progress);
+      },signal,progress,mode);
       await checkProject(project);signal.throwIfAborted();return images;
     },
     attachPDF:async(requested:any,project:Project,bytes:Uint8Array,makePreferred:boolean)=>{

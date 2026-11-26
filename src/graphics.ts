@@ -176,18 +176,27 @@ export function graphicGroups(project:Project):GraphicGroup[] {
     }
   }
   // Attach only nearby structural lines. Ordinary explanatory prose is a hard boundary.
+  // A short phase label is structural only inside an existing algorithm and with
+  // a physically adjacent numbered/control-flow step below it. Topic alone is insufficient.
+  const phaseLabel=(b:Block)=>!b.kindEdited&&!b.edited&&!b.frontMatter&&b.rects.length===1&&
+    /^[A-Za-z][A-Za-z0-9 \u2013-]{0,50}:\s+[^\n.!?]{1,120}$/u.test(b.source.trim())&&
+    project.blocks.some(next=>next!==b&&algorithmLine(next)&&/^(?:\d+\s*:|\(\d+\)|(?:parallel\s+)?for\b|while\b)/iu.test(clean(next.source))&&
+      next.rects.length===1&&next.rects[0][0]===b.rects[0][0]&&
+      Math.min(next.rects[0][3],b.rects[0][3])>Math.max(next.rects[0][1],b.rects[0][1])&&
+      b.rects[0][2]-next.rects[0][4]>=-1&&b.rects[0][2]-next.rects[0][4]<=18);
+  const structural=(b:Block)=>algorithmLine(b)||phaseLabel(b);
   for(const group of groups.filter(g=>g.family==='algorithm')){
     let changed=true;
     while(changed){
       changed=false;
       for(const block of project.blocks){
-        if(group.blockIDs.includes(block.id)||!algorithmLine(block)||block.rects.some(r=>r[0]!==group.sourcePage))continue;
+        if(group.blockIDs.includes(block.id)||!structural(block)||block.rects.some(r=>r[0]!==group.sourcePage))continue;
         const box=bounds([block],group.sourcePage)!;
         const horizontal=Math.min(box.right,group.box.right)-Math.max(box.left,group.box.left);
         const gap=Math.max(0,box.bottom-group.box.top,group.box.bottom-box.top);
         if(horizontal<=0||gap>18)continue;
         const gapBottom=Math.min(group.box.top,box.top),gapTop=Math.max(group.box.bottom,box.bottom);
-        const barrier=gap>1&&project.blocks.some(b=>!group.blockIDs.includes(b.id)&&b!==block&&!algorithmLine(b)&&
+        const barrier=gap>1&&project.blocks.some(b=>!group.blockIDs.includes(b.id)&&b!==block&&!structural(b)&&
           ['body','heading','reference'].includes(b.kind)&&b.rects.some(r=>r[0]===group.sourcePage&&r[2]>=gapBottom&&r[4]<=gapTop&&
             Math.min(r[3],group.box.right)>Math.max(r[1],group.box.left)));
         if(barrier)continue;

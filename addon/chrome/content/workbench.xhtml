@@ -45,8 +45,8 @@
     <button id="start" class="primary">翻译并生成 PDF</button>
     <button id="cancel" disabled="disabled">取消</button>
   </nav>
-  <label class="inline"><input id="vision-before-review" type="checkbox" />生成 PDF 前，自动用当前模型识别需复核段落</label>
-  <p class="hint">图片识别跟随当前模型及服务优先级，需支持图片输入；只上传目标段落截图，使用对应服务的额度。人工修订保留，有疑问时停留在核对区。</p>
+  <label class="inline"><input id="vision-before-review" type="checkbox" />生成 PDF 前，自动检查并修复疑难段落（无需人工确认）</label>
+  <p class="hint">使用当前支持图片的模型自动识别、复查和重译，只上传目标区域及公式细节，使用对应服务的额度。仍无法确认时在对应位置保留原文图像，继续生成 PDF；已有译文和人工修订保留。</p>
   <section id="task-progress" data-busy="false" aria-label="任务进度">
     <div id="status" role="status" aria-live="polite">准备中…</div>
     <p id="provider-status" class="hint" role="status" aria-live="polite"></p>
@@ -60,18 +60,18 @@
   <p id="project-summary" class="hint">尚未载入翻译项目</p>
   <p id="math-summary" class="hint">数学表达正在识别…</p>
   <details><summary>分步操作：词表与翻译</summary><div class="row"><button id="terms-action">识别本文术语</button><button id="translate">仅翻译未完成段落</button><button id="repair-review">重译需复核段落（保留人工修订）</button></div><p class="hint">已有译文默认保留。结构升级后，可重译需复核的自动译文；只有成功返回并通过校验后才覆盖该段，失败可继续。</p></details>
-  <p class="notice">版面识别可能有误。请复核正文与图表分类；图表、图注、表格、公式、代码及参考文献默认保留原文。扫描件需先 OCR。</p>
+  <p class="notice">图表、图注、表格、算法、公式、代码及参考文献默认保留原文。启用自动检查后，疑难段落自动处理，无需逐段确认。扫描件需先 OCR。</p>
   <main>
     <aside><div class="list-heading"><strong>段落</strong><select id="filter" aria-label="筛选段落"><option value="all">全部</option><option value="pending">未翻译</option><option value="editable">正文 / 标题</option><option value="math-review">公式 / 格式需复核</option><option value="keep">保留英文</option></select></div><div id="block-list"></div></aside>
     <section class="editor">
       <div class="row"><strong id="block-title">请选择段落</strong><label class="inline">区域类型 <select id="kind"><option value="body">正文（翻译）</option><option value="heading">标题（翻译）</option><option value="figure">图（原文）</option><option value="caption">图注 / 表注（原文）</option><option value="table">表格（原文）</option><option value="math">公式（原文）</option><option value="code">代码（原文）</option><option value="reference">参考文献（原文）</option><option value="keep">其他（保留英文）</option></select></label></div>
       <label class="area">英文原文<textarea id="source" readonly="readonly" spellcheck="false"></textarea></label>
-      <details id="vision-panel"><summary>当前模型图片识别与原图核对</summary>
+      <details id="vision-panel"><summary>当前模型图片识别与可选修订</summary>
         <p class="hint">“图片识别本段”会上传这一段的原文截图。识别结果单独保存，采用后用于之后的翻译；已有译文不会因识别而直接覆盖。</p>
         <div class="row"><button id="vision-preview">查看原文截图（本地）</button><button id="vision-recognize">图片识别本段（当前模型）</button></div>
         <p id="vision-status" class="hint"></p><div id="vision-images"></div>
         <div id="vision-result" hidden="hidden"><label class="area">识别原文（可修订，数学使用 LaTeX）<textarea id="vision-text" spellcheck="false" rows="8"></textarea></label>
-          <div class="row"><button id="vision-save">保存识别修订</button><button id="vision-apply">采用识别结果（已核对）</button><button id="vision-restore">恢复本地识别</button></div>
+          <div class="row"><button id="vision-save">保存识别修订</button><button id="vision-apply">采用当前识别</button><button id="vision-restore">恢复本地识别</button></div>
         </div>
       </details>
       <label class="area">中文译文（可以直接修改）<textarea id="translation" spellcheck="false" placeholder="生成译文后可在此修订；原文保留区域无需填写。"></textarea></label>
