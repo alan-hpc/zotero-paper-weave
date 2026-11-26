@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-alpha.48
+
+- Recover a failed source-bound sentence group at complete-sentence granularity instead of repeating the same oversized group. Preserve group checkpoints and add source/configuration-bound sentence checkpoints; resume only missing validated units after cancellation, failure or restart.
+- Keep source occurrences distinct even for identical formulas. Explain pronoun handling in the recovery prompt, retain strict per-sentence/group/paragraph audits, and reject extra literal protected values at assembly. Do not delete or permit duplicate formulas to make validation pass.
+- Preserve completed sentence progress before replaying it, validate nested checkpoint imports, stop immediately after cancellation and retain old wording until the whole paragraph passes. Bound inner plans to 32 complete sentences with two responses per sentence; no split through formulas, code, parentheses or emphasis.
+- Treat `Tab.`/`Tabs.` as reference abbreviations. Report actual missing/repeated/unknown counts and the failed group/sentence in batch and editor diagnostics, including saved inner progress.
+- Pass complete offline regressions. In an isolated DistMoE copy, translate b232 through the current local Codex `gpt-6-luna` in six requests, retaining all four loss formulas and all other saved paragraphs. Validate its PDF layout; the full project still has other mathematical review items to process. No live Zotero cache writes or native installation acceptance.
+
 ## 0.1.0-alpha.47
 
 - Extend trusted algorithm regions through kernel declarations, comments, parallel loops, numbered steps, assignments and dense table/math fragments. Recognize paragraph-form algorithm captions only with adjacent aligned Input/Require evidence; retain narrative/manual boundaries and complete original crops.

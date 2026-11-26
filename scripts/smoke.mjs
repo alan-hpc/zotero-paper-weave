@@ -32,6 +32,8 @@ try {
   await verifyProtection(moduleFor);
   const {verifyTranslationParts}=await import('./translation-parts-regression.mjs');
   await verifyTranslationParts(moduleFor);
+  const {verifySentenceRecovery}=await import('./sentence-recovery-regression.mjs');
+  await verifySentenceRecovery(moduleFor);
   const {verifyNetwork}=await import('./network-regression.mjs');
   await verifyNetwork(moduleFor);
   const {verifyFallback}=await import('./fallback-regression.mjs');

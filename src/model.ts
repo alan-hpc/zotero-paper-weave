@@ -15,9 +15,12 @@ export interface InlineMathSpan extends TextRange {
   reason:string;
 }
 export interface MathReference extends TextRange {sourceIndex:number}
+export interface RecoveryPiece {index:number;text:string;source?:{model:string;provider?:ProviderName}}
+export interface RecoveryLocation {part:number;total:number;issues:string[];sentence?:{index:number;total:number}}
 export interface TranslationRecovery {
   protocol:1;key:string;total:number;at:string;
-  completed:{index:number;text:string;source?:{model:string;provider?:ProviderName}}[];
+  completed:RecoveryPiece[];
+  sentence?:{part:number;key:string;total:number;completed:RecoveryPiece[]};
 }
 export interface Block {
   id: string;
@@ -55,7 +58,7 @@ export interface Block {
   /** Old saved translation predates inline-style extraction and may have flattened math. */
   translationNeedsRefresh?: boolean;
   /** Bounded validation failure retained across restarts; never a model draft. */
-  translationFailure?:{kind:'protection';missing:number;repeated:number;unknown:number;at:string;recovery?:{part:number;total:number;issues:string[]}};
+  translationFailure?:{kind:'protection';missing:number;repeated:number;unknown:number;at:string;recovery?:RecoveryLocation};
   translationRecovery?:TranslationRecovery;
   translatedWith?: { model: string; provider?: ProviderName; promptVersion: string; at: string };
 }
@@ -96,6 +99,9 @@ export const PROMPT_VERSION = '10';
 export const EXTRACTION_VERSION = 11;
 export const canTranslate = (b: Block) => (b.kind === 'body' || b.kind === 'heading') && (!b.originalGraphic || !!b.kindEdited)&&(!b.proseGroupAnchor||!!b.kindEdited);
 export const now = () => new Date().toISOString();
+const validPieces=(pieces:RecoveryPiece[],total:number)=>Array.isArray(pieces)&&pieces.length<=total&&
+  new Set(pieces.map(p=>p.index)).size===pieces.length&&!pieces.some(p=>!Number.isInteger(p.index)||p.index<0||p.index>=total||typeof p.text!=='string'||!p.text.trim()||p.text.length>26000||
+    p.source&&(typeof p.source.model!=='string'||p.source.model.length>400||p.source.provider!==undefined&&!['codex','deepseek','custom'].includes(p.source.provider)));
 export function validateProject(p: unknown): asserts p is Project {
   const a = p as Project;
   if (a?.schema !== 1 || !a.source?.key || !a.source.hash || !Array.isArray(a.blocks) ||
@@ -134,14 +140,18 @@ export function validateProject(p: unknown): asserts p is Project {
     if(b.translationFailure?.recovery){const r=b.translationFailure.recovery;
       if(!Number.isInteger(r.part)||!Number.isInteger(r.total)||r.part<1||r.part>r.total||r.total>8||!Array.isArray(r.issues)||r.issues.length>20||r.issues.some(i=>typeof i!=='string'||i.length>300))
         throw new Error('翻译失败位置记录无效。');
+      if(r.sentence&&(!Number.isInteger(r.sentence.index)||!Number.isInteger(r.sentence.total)||r.sentence.index<1||r.sentence.index>r.sentence.total||r.sentence.total>32))
+        throw new Error('逐句恢复失败位置无效。');
     }
     if(b.translationRecovery){
       const r=b.translationRecovery;
       if(r.protocol!==1||!/^[a-f0-9]{16}$/u.test(r.key)||!Number.isInteger(r.total)||r.total<1||r.total>8||typeof r.at!=='string'||
-        !Array.isArray(r.completed)||r.completed.length>r.total||new Set(r.completed.map(p=>p.index)).size!==r.completed.length||
-        r.completed.some(p=>!Number.isInteger(p.index)||p.index<0||p.index>=r.total||typeof p.text!=='string'||!p.text.trim()||p.text.length>26000||
-          p.source&&(typeof p.source.model!=='string'||p.source.model.length>400||p.source.provider!==undefined&&!['codex','deepseek','custom'].includes(p.source.provider))))
+        !validPieces(r.completed,r.total))
         throw new Error('翻译恢复进度格式无效。');
+      if(r.sentence){const s=r.sentence;
+        if(!Number.isInteger(s.part)||s.part<0||s.part>=r.total||!/^[a-f0-9]{16}$/u.test(s.key)||!Number.isInteger(s.total)||s.total<2||s.total>32||!validPieces(s.completed,s.total)||r.completed.some(p=>p.index===s.part))
+          throw new Error('逐句恢复进度格式无效。');
+      }
     }
     if(b.translationVisionKey!==undefined&&!/^[a-f0-9]{16}$/u.test(b.translationVisionKey))throw new Error('图片识别译文绑定无效。');
     if(b.visionHistory!==undefined&&(!Array.isArray(b.visionHistory)||b.visionHistory.length>3))throw new Error('图片识别历史格式无效。');

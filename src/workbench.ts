@@ -147,8 +147,8 @@ function reviewDetails(blocks:Block[]){
 }
 function translationFailureText(b:Block){
   const f=b.translationFailure!,r=f.recovery,progress=b.translationRecovery;
-  const detail=r?`第 ${r.part}/${r.total} 句组：${r.issues.join('；')}。`:`缺少 ${f.missing}、重复 ${f.repeated}、未知 ${f.unknown}。`;
-  return `译文保护校验未通过，${detail}${progress?`已保存 ${progress.completed.length}/${progress.total} 句组，可继续剩余部分。`:''}旧译文保留。`+
+  const detail=r?`第 ${r.part}/${r.total} 句组${r.sentence?`的第 ${r.sentence.index}/${r.sentence.total} 句`:''}：${r.issues.join('；')}。`:`缺少 ${f.missing}、重复 ${f.repeated}、未知 ${f.unknown}。`;
+  return `译文保护校验未通过，${detail}${progress?`已保存 ${progress.completed.length}/${progress.total} 句组${progress.sentence?`，当前句组 ${progress.sentence.completed.length}/${progress.sentence.total} 句`:''}，可继续剩余部分。`:''}旧译文保留。`+
     (b.vision?.active&&project&&visionMatches(project,b)?'图片识别已采用，无需重复识别；可继续翻译或修订本段。':'可用图片识别恢复或手动修订。');
 }
 async function rememberProtectionFailure(block:Block,error:TranslationProtectionError){
@@ -352,7 +352,8 @@ async function translateRemaining(client: Provider, settings: Settings, signal: 
   if(failed)throw firstError;
   if(paragraphFailures.size){
     const recognized=[...paragraphFailures.keys()].some(id=>{const b=project!.blocks.find(b=>b.id===id)!;return b.vision?.active&&visionMatches(project!,b);});
-    throw Object.assign(new Error(`已保存 ${completed}/${total} 段；${[...paragraphFailures.keys()].join('、')} 共 ${paragraphFailures.size} 段保护标记校验未通过，译文未覆盖。其他段落已处理完；${recognized?'已采用图片识别的段落是译文校验失败，无需重复识别；可重新翻译或修订。':'可对失败段使用图片识别或修订后继续。'}本次未生成 PDF。`),{code:'PW_PROTECTION_BATCH',blockIDs:[...paragraphFailures.keys()]});
+    const details=[...paragraphFailures.values()].slice(0,2).map(s=>s.split('。')[0]).join('；');
+    throw Object.assign(new Error(`已保存 ${completed}/${total} 段；${[...paragraphFailures.keys()].join('、')} 共 ${paragraphFailures.size} 段保护标记校验未通过，译文未覆盖。${details}。其他段落已处理完；${recognized?'已采用图片识别的段落是译文校验失败，无需重复识别；可重新翻译或修订。':'可对失败段使用图片识别或修订后继续。'}本次未生成 PDF。`),{code:'PW_PROTECTION_BATCH',blockIDs:[...paragraphFailures.keys()]});
   }
   if(pending.length===0)updateProgress();
   else phase('逐段翻译',completed,total,'段');

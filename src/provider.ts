@@ -1,9 +1,9 @@
-import { Block, Project, ProviderName, Settings, Term, TermBatch, TextRange, MathReference, TranslationRecovery, PROMPT_VERSION, canTranslate, now } from './model';
+import { Block, Project, ProviderName, Settings, Term, TermBatch, TextRange, MathReference, TranslationRecovery, RecoveryLocation, PROMPT_VERSION, canTranslate, now } from './model';
 import { listInfo, listText } from './lists';
 import { SCRIPT_EXPRESSION, LATEX_EXPRESSION, latexBody } from './inlineMath';
 import { ProtectionRegistry, ProtectionAudit, RestoredText, protectOriginal } from './protection';
 import { visionSourceBlock,visionTranslationKey,visionFingerprint } from './vision';
-import {translationParts} from './translationParts';
+import {translationParts,type TranslationPart} from './translationParts';
 import {protectedTranslation,SLOT_INSTRUCTIONS,SLOT_TRANSLATION_TASK} from './protectedTranslation';
 
 const SYSTEM = `You translate scientific papers from English into Simplified Chinese.
@@ -58,6 +58,11 @@ function parseJSON(text: string): any {
 }
 const TERM_BATCH_CHARS = 7000;
 export interface TranslationSource { model:string; provider?:ProviderName }
+const combinedSource=(sources:TranslationSource[]):TranslationSource|undefined=>{
+  const models=[...new Set(sources.map(s=>s.model))],providers=[...new Set(sources.map(s=>s.provider))];
+  return models.length?{model:models.join(' / '),...(providers.length===1&&providers[0]?{provider:providers[0]}:{})}:undefined;
+};
+const joinedParts=(texts:string[],parts:TranslationPart[])=>texts.map((text,i)=>text+(i<texts.length-1?(/\n/u.test(parts[i].paragraph.match(/\s*$/u)![0])?'\n\n':' '):'')).join('');
 export interface TranslationResult { text: string; boldRanges: TextRange[]; mathRefs?:MathReference[]; source?:TranslationSource }
 export interface RequestOptions {
   images?:string[];
@@ -113,9 +118,9 @@ const MATH_OPERATOR = String.raw`(?:∈|∉|=|≈|≠|≤|≥|<|>|×|÷|\*|±|�
 const MATH_EXPRESSION = new RegExp(`${MATH_ATOM}(?:\\s*${MATH_OPERATOR}\\s*${MATH_ATOM})+|[\\p{L}\\p{N}\\u{1D400}-\\u{1D7FF}]+[\\u02B0-\\u02FF\\u2070-\\u209F\\u1D2C-\\u1D6A]+|[\\p{L}\\p{N}]+(?:[_^](?:\\{[^{}]+\\}|[\\p{L}\\p{N}]+))+`, 'gu');
 export class TranslationProtectionError extends Error {
   readonly code='PW_PROTECTION_INVALID';
-  readonly recovery?:{part:number;total:number;issues:string[]};
-  constructor(readonly blockID:string,readonly audit:ProtectionAudit,recovery:boolean|{part:number;total:number;issues:string[]}=false){
-    super(`${blockID} 的公式或技术术语标记校验失败（缺少 ${audit.missing.length}、重复 ${audit.repeated.length}、未知或损坏 ${audit.unknown.length}）；${recovery?'整段重试及结构化恢复后仍未通过':'已尝试修复 3 次'}。本段未保存，已有译文与人工修订均已保留；可继续翻译未完成段落或修订本段。`);
+  readonly recovery?:RecoveryLocation;
+  constructor(readonly blockID:string,readonly audit:ProtectionAudit,recovery:boolean|RecoveryLocation=false){
+    super(`${blockID} 的公式或技术术语标记校验失败（缺少 ${audit.missing.length}、重复 ${audit.repeated.length}、未知或损坏 ${audit.unknown.length}）；${recovery?'整段重试及结构化恢复后仍未通过':'已尝试修复 3 次'}${typeof recovery==='object'?`，第 ${recovery.part}/${recovery.total} 句组${recovery.sentence?`的第 ${recovery.sentence.index}/${recovery.sentence.total} 句`:''}`:''}。本段未保存，已有译文与人工修订均已保留；可继续翻译未完成段落或修订本段。`);
     this.name='TranslationProtectionError';
     if(typeof recovery==='object')this.recovery=recovery;
   }
@@ -413,34 +418,69 @@ Return {"terms":[{"source":"exact phrase occurring in the text","reason":"short 
     const key=visionFingerprint(JSON.stringify(['readable-source-1',project.source.key,project.source.hash,block.id,block.source,block.rects,block.vision?.cacheKey,block.proseGroup?.memberIDs,plan.paragraph,
       plan.placeholders.map(t=>plan.registry.value(t)),block.sourceBoldRanges,block.mathSpans,this.settings.baseURL,this.settings.model,this.settings.prompt,PROMPT_VERSION]));
     const recovery:TranslationRecovery={protocol:1,key,total:parts.length,at:now(),completed:[]};
+    const saved=block.translationRecovery?.key===key&&block.translationRecovery.total===parts.length?block.translationRecovery:undefined;
+    const persist=async()=>{this.signal.throwIfAborted();recovery.at=now();await this.options.onRecoveryProgress?.(block.id,JSON.parse(JSON.stringify(recovery)));};
     for(const [index,part]of parts.entries()){
-      const registry=plan.registry.subset(part.placeholders),request=protectedTranslation(part,registry);let previous:unknown,issues:string[]=[];
-      const cached=block.translationRecovery?.key===key&&block.translationRecovery.total===parts.length?block.translationRecovery.completed.find(p=>p.index===index):undefined;
+      this.signal.throwIfAborted();
+      const registry=plan.registry.subset(part.placeholders),cached=saved?.completed.find(p=>p.index===index);
       if(cached&&registry.audit(cached.text).valid&&parseBoldMarkup(cached.text,part.boldCount)){
         drafts.push(cached.text);if(cached.source)sources.push(cached.source);recovery.completed.push(cached);continue;
       }
-      for(let attempt=0;attempt<2;attempt++){
-        this.signal.throwIfAborted();
-        const result=await this.json(system+'\n'+SLOT_INSTRUCTIONS,
-          {task:SLOT_TRANSLATION_TASK,paragraph:request.paragraph.trim(),protectedSlots:request.protectedSlots,
-            paperTitle:project.source.title,paragraphContext:block.source,paragraphPart:{index:index+1,total:parts.length},
-            ...(attempt?{previousDraft:previous,repairIssues:issues}:{})},
-          {requestId:`${block.id} · 来源绑定恢复 ${index+1}/${parts.length}`,plainTextField:'translation'});
-        const assembled=request.assemble(result),text=assembled.text;issues=assembled.issues;
-        if(!issues.length&&!parseBoldMarkup(text,part.boldCount))issues.push('未保留原文加粗范围');
-        if(issues.length){previous=result;if(!attempt)continue;throw new TranslationProtectionError(block.id,{missing:[],repeated:[],unknown:issues,valid:false},{part:index+1,total:parts.length,issues});}
-        drafts.push(text);const source=this.sourceFor(result);if(source)sources.push(source);
-        recovery.completed.push({index,text,...(source?{source}:{})});recovery.at=now();
-        await this.options.onRecoveryProgress?.(block.id,JSON.parse(JSON.stringify(recovery)));break;
+      const location={part:index+1,total:parts.length},sentences=translationParts(part.paragraph,part.placeholders,true,true);
+      const sentenceKey=visionFingerprint(JSON.stringify(['sentence-source-1',key,index,sentences.map(p=>p.paragraph)]));
+      const savedSentence=saved?.sentence?.part===index&&saved.sentence.key===sentenceKey&&saved.sentence.total===sentences.length?saved.sentence:undefined;
+      const failedBefore=block.translationFailure?.recovery?.part===index+1&&block.translationFailure.recovery.total===parts.length;
+      let unit:{text:string;source?:TranslationSource}|undefined,lastError:unknown;
+      if(!savedSentence&&!(failedBefore&&sentences.length>1)){
+        try{unit=await this.recoverSourceUnit(block,project,system,part,registry,location);}
+        catch(error){if(!(error instanceof TranslationProtectionError))throw error;lastError=error;}
       }
+      if(!unit){
+        if(sentences.length<2)throw lastError||new TranslationProtectionError(block.id,registry.audit(''),{...location,issues:['没有可安全拆分的完整句子']});
+        const retained=(savedSentence?.completed||[]).filter(p=>{
+          const sentence=sentences[p.index];return sentence&&registry.subset(sentence.placeholders).audit(p.text).valid&&parseBoldMarkup(p.text,sentence.boldCount);
+        });
+        recovery.sentence={part:index,key:sentenceKey,total:sentences.length,completed:retained.map(p=>({...p}))};await persist();
+        const texts:string[]=[],sentenceSources:TranslationSource[]=[];
+        for(const [sentenceIndex,sentence]of sentences.entries()){
+          this.signal.throwIfAborted();
+          const subset=registry.subset(sentence.placeholders),previous=savedSentence?.completed.find(p=>p.index===sentenceIndex);
+          const piece=previous&&subset.audit(previous.text).valid&&parseBoldMarkup(previous.text,sentence.boldCount)?previous:
+            await this.recoverSourceUnit(block,project,system,sentence,subset,{...location,sentence:{index:sentenceIndex+1,total:sentences.length}});
+          texts.push(piece.text);if(piece.source)sentenceSources.push(piece.source);
+          if(!recovery.sentence.completed.some(p=>p.index===sentenceIndex))recovery.sentence.completed.push({index:sentenceIndex,text:piece.text,...(piece.source?{source:piece.source}:{})});await persist();
+        }
+        const merged=protectedTranslation(part,registry).assemble({translation:joinedParts(texts,sentences)}),text=merged.text,audit=registry.audit(text);
+        if(merged.issues.length)throw new TranslationProtectionError(block.id,audit.valid?{missing:[],repeated:[],unknown:merged.issues,valid:false}:audit,{...location,issues:merged.issues});
+        if(!parseBoldMarkup(text,part.boldCount))throw new Error(`${block.id} 逐句合并未保留加粗范围，旧译文已保留。`);
+        unit={text,source:combinedSource(sentenceSources)};delete recovery.sentence;
+      }
+      drafts.push(unit.text);if(unit.source)sources.push(unit.source);
+      recovery.completed.push({index,text:unit.text,...(unit.source?{source:unit.source}:{})});await persist();
     }
     this.signal.throwIfAborted();
-    const joined=drafts.map((text,i)=>text+(i<drafts.length-1?(/\n/u.test(parts[i].paragraph.match(/\s*$/u)![0])?'\n\n':' '):'')).join('');
-    const audit=plan.registry.audit(joined);if(!audit.valid)throw new TranslationProtectionError(block.id,audit,true);
+    const merged=protectedTranslation({paragraph:plan.paragraph,placeholders:plan.placeholders,boldCount:plan.boldCount},plan.registry).assemble({translation:joinedParts(drafts,parts)}),joined=merged.text;
+    const audit=plan.registry.audit(joined);if(merged.issues.length)throw new TranslationProtectionError(block.id,audit.valid?{missing:[],repeated:[],unknown:merged.issues,valid:false}:audit,true);
     const formatted=parseBoldMarkup(joined,plan.boldCount);if(!formatted)throw new Error(`${block.id} 分句合并未保留加粗范围，旧译文已保留。`);
-    const models=[...new Set(sources.map(s=>s.model))],providers=[...new Set(sources.map(s=>s.provider))];
-    const source=models.length?{model:models.join(' / '),...(providers.length===1&&providers[0]?{provider:providers[0]}:{})}:undefined;
-    return translationResult(block,plan.registry.restore(formatted.text,formatted.boldRanges),source);
+    return translationResult(block,plan.registry.restore(formatted.text,formatted.boldRanges),combinedSource(sources));
+  }
+  private async recoverSourceUnit(block:Block,project:Project,system:string,part:TranslationPart,registry:ProtectionRegistry,location:Omit<RecoveryLocation,'issues'>):Promise<{text:string;source?:TranslationSource}>{
+    const request=protectedTranslation(part,registry);let previous:unknown,issues:string[]=[];
+    for(let attempt=0;attempt<2;attempt++){
+      this.signal.throwIfAborted();
+      const result=await this.json(system+'\n'+SLOT_INSTRUCTIONS,
+        {task:SLOT_TRANSLATION_TASK,paragraph:request.paragraph.trim(),protectedSlots:request.protectedSlots,
+          paperTitle:project.source.title,paragraphContext:block.source,paragraphPart:{index:location.part,total:location.total},
+          ...(location.sentence?{paragraphSentence:location.sentence}:{}),...(attempt?{previousDraft:previous,repairIssues:issues}:{})},
+        {requestId:`${block.id} · 来源绑定恢复 ${location.part}/${location.total}${location.sentence?` · 逐句 ${location.sentence.index}/${location.sentence.total}`:''}`,plainTextField:'translation'});
+      this.signal.throwIfAborted();
+      const assembled=request.assemble(result),text=assembled.text;issues=assembled.issues;
+      if(!issues.length&&!parseBoldMarkup(text,part.boldCount))issues.push('未保留原文加粗范围');
+      if(!issues.length)return{text,source:this.sourceFor(result)};
+      previous=result;
+      if(attempt){const audit=registry.audit(text);throw new TranslationProtectionError(block.id,audit.valid?{missing:[],repeated:[],unknown:issues,valid:false}:audit,{...location,issues});}
+    }
+    throw new Error(`${block.id} 来源绑定恢复未完成。`);
   }
 }
 export interface RequestProgress {

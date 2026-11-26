@@ -62,16 +62,16 @@ export async function verifyTranslationParts(moduleFor){
     let seen=0;client.json=async(_system,p)=>{seen++;return corrupt(p);};
     const old=structuredClone(savedFailure);
     await assert.rejects(client.translate(savedFailure,project),e=>e.code==='PW_PROTECTION_INVALID'&&/结构化恢复/.test(e.message)&&e.recovery.part===1);
-    assert.equal(seen,2,'a bad recovery unit stops within two attempts');assert.deepEqual(savedFailure,old);
+    assert.equal(seen,4,'a bad group gets two attempts, then only its first failed sentence gets two attempts');assert.deepEqual(savedFailure,old);
   }
   let checkpoint,progressCalls=0,unit=0;
   const interrupted=new Provider(settings,'',new AbortController().signal,()=>{},{onRecoveryProgress:async(_id,r)=>{progressCalls++;checkpoint=structuredClone(r);}});
   interrupted.json=async(_system,p)=>++unit===1?echo(p):{translation:'没有任何保护项'};
   await assert.rejects(interrupted.translate(savedFailure,project),e=>e.code==='PW_PROTECTION_INVALID');
-  assert.equal(progressCalls,1);assert.equal(checkpoint.completed.length,1);assert.equal(savedFailure.translation,b.translation);
+  assert.equal(progressCalls,2);assert.equal(checkpoint.completed.length,1);assert.equal(checkpoint.sentence.completed.length,0);assert.equal(savedFailure.translation,b.translation);
   const resumed={...savedFailure,translationRecovery:checkpoint};let resumedCalls=0;
   client.json=async(_system,p)=>{resumedCalls++;assert.ok(p.paragraphPart.index>1,'completed sentence groups survive a restart');return echo(p);};
-  assert.equal((await client.translate(resumed,project)).text,source);assert.equal(resumedCalls,parts.length-1);
+  assert.equal((await client.translate(resumed,project)).text,source);assert.equal(resumedCalls,translationParts(parts[1].paragraph,parts[1].placeholders,true,true).length+parts.length-2);
   const differentPaper={...project,source:{...project.source,key:'different'}};let firstAgain=false;
   client.json=async(_system,p)=>{if(p.paragraphPart.index===1)firstAgain=true;return echo(p);};
   await client.translate(resumed,differentPaper);assert.equal(firstAgain,true,'a checkpoint cannot be rebound to another paper');
@@ -83,10 +83,10 @@ export async function verifyTranslationParts(moduleFor){
 
   const bold={...b,boldWhole:true};const boldPlan=prepareTranslation(bold,project);
   assert.deepEqual(translationParts(boldPlan.paragraph,boldPlan.placeholders),[],'never split an emphasis span or weaken validation to force recovery');
-  const sentences='Eq. (3) and Fig. 2 describe GPU with kernel. ';
+  const sentences='Eq. (3), Tab. 17 and Fig. 2 describe GPU with kernel. ';
   const abbreviation=prepareTranslation({...b,source:sentences.repeat(12),sourceBoldRanges:[]},project);
   const abbreviationParts=translationParts(abbreviation.paragraph,abbreviation.placeholders);
-  assert.ok(abbreviationParts.length>1);assert.ok(abbreviationParts.every(p=>!/(?:Eq|Fig)\.\s*$/u.test(p.paragraph)));
+  assert.ok(abbreviationParts.length>1);assert.ok(abbreviationParts.every(p=>!/(?:Eq|Fig|Tab)\.\s*$/u.test(p.paragraph)));
   const many=prepareTranslation({...b,source:source.repeat(30),sourceBoldRanges:[]},project);
   assert.deepEqual(translationParts(many.paragraph,many.placeholders),[],'excessive sentence groups stay blocked rather than starting an unbounded recovery');
   console.log('PASS dense paragraph recovery: complete sentence boundaries, exact marker subsets, full-context requests, bounded retries, global audit, bold preservation, persisted-failure resume, foreign-marker rejection and cancellation without partial saves');
