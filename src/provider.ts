@@ -207,6 +207,7 @@ export class Provider {
     if(options.images&&(!options.images.length||options.images.length>6||options.images.some(s=>typeof s!=='string'||!/^data:image\/png;base64,[A-Za-z0-9+/]+=*$/u.test(s))||options.images.reduce((n,s)=>n+s.length,0)>24*1024*1024))
       throw new Error('图片请求格式或大小无效。');
     const url = endpoint(this.settings.baseURL);
+    const deepseek=/^deepseek-/iu.test(this.settings.model);
     const timeoutMS=options.timeoutMS ?? 120000, maxAttempts=options.maxAttempts ?? 3;
     const requestId=options.requestId ?? 'request';
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -230,10 +231,10 @@ export class Provider {
           method: 'POST', redirect: 'error', signal: timeout.signal,
           headers: { 'Content-Type': 'application/json', ...(this.key ? { Authorization: `Bearer ${this.key}` } : {}) },
           body: JSON.stringify({ model: this.settings.model, temperature: 0.1,
-            ...(options.visionTranscription?{thinking:{type:'disabled'},max_tokens:8192}:{}),
+            ...(options.visionTranscription?{max_tokens:8192,...(deepseek?{thinking:{type:'disabled'}}:{})}:{}),
             ...(useJSONMode ? { response_format: { type: 'json_object' } } : {}),
             messages: [{ role: 'system', content: system }, { role: 'user', content: options.images?
-              [{type:'text',text:JSON.stringify(payload)},...options.images.map(url=>({type:'image_url',image_url:{url,detail:'original'}}))]:JSON.stringify(payload) }] })
+              [{type:'text',text:JSON.stringify(payload)},...options.images.map(url=>({type:'image_url',image_url:{url,detail:deepseek?'original':'auto'}}))]:JSON.stringify(payload) }] })
         });
         stage='response';
         if (!res.ok) {
@@ -243,6 +244,8 @@ export class Provider {
           try{const parsed=JSON.parse(detail);if(typeof parsed?.error?.code==='string')code=parsed.error.code;}catch{}
           const quota=quotaExhausted(res.status,code);
           if(quota)throw new ModelServiceError(res.status,code);
+          if(options.images?.length&&res.status===400&&code==='invalid_messages')
+            throw new Error('当前端点未接受图片输入。若使用本机 Codex，请更新并重启本版配套代理；其他服务请确认所选模型支持图片。');
           if (res.status === 400 && useJSONMode) {
             if (/response_format|json_object/i.test(detail) && /unsupported|not supported|unknown|unrecognized|invalid|not allowed/i.test(detail)) {
               this.jsonMode = false;

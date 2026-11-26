@@ -726,6 +726,55 @@ try {
   assert.equal(primaryReview.vision.issues.length,1,'user adoption retains the original recognition issue for provenance');
   console.log('PASS primary vision workflow: full cached PDF repair, shared review detection, manual revisions, uncertain-result hold and explicit-adoption resume');
 
+  const routeRequests=[];
+  uiContext.fetch=async(url,options)=>{
+    const body=JSON.parse(options.body),content=body.messages[1].content;
+    routeRequests.push({url,model:body.model,image:Array.isArray(content)});
+    if(Array.isArray(content)){
+      assert.equal(body.thinking,undefined,'non-DeepSeek services never receive DeepSeek-only parameters');
+      assert.equal(content[1].image_url.detail,'auto');
+      const payload=JSON.parse(content[0].text);
+      return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({block_id:payload.block_id,kind:'body',source_text:String.raw`Use \(\sum x\) in this paragraph.`,uncertain:false,issues:[]})}}]})};
+    }
+    const payload=JSON.parse(content);
+    return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({translation:'当前模型识别后译文 '+payload.paragraph})}}]})};
+  };
+  elements.get('codex-enabled').checked=true;elements.get('deepseek-enabled').checked=false;
+  elements.get('codex-base').value='http://127.0.0.1:47771/v1';elements.get('codex-model').value='gpt-6-luna';
+  resetPrimaryReview();
+  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.ok(routeRequests.some(r=>r.image));assert.ok(routeRequests.every(r=>r.url==='http://127.0.0.1:47771/v1/chat/completions'&&r.model==='gpt-6-luna'));
+  assert.equal(primaryReview.vision.model,'gpt-6-luna');assert.equal(primaryReview.translatedWith.provider,'codex');
+  elements.get('codex-enabled').checked=false;elements.get('custom-enabled').checked=true;
+  elements.get('base').value='https://vision.example.test/v1';elements.get('model').value='account-vision-model';
+  resetPrimaryReview();routeRequests.length=0;
+  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.ok(routeRequests.some(r=>r.image));assert.ok(routeRequests.every(r=>r.url==='https://vision.example.test/v1/chat/completions'&&r.model==='account-vision-model'));
+  assert.equal(primaryReview.vision.model,'account-vision-model');
+  elements.get('custom-enabled').checked=false;elements.get('codex-enabled').checked=true;elements.get('deepseek-enabled').checked=true;
+  elements.get('auto-fallback').checked=true;elements.get('deepseek-model').value='deepseek-flash';
+  elements.get('codex-up').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  resetPrimaryReview();primaryReview.translation='';routeRequests.length=0;
+  uiContext.fetch=async(url,options)=>{
+    const body=JSON.parse(options.body),content=body.messages[1].content;routeRequests.push({url,model:body.model,image:Array.isArray(content)});
+    if(url.startsWith('http://127.0.0.1:47771'))return{ok:false,status:402,text:async()=>'{"error":{"code":"codex_usage_limit"}}'};
+    if(Array.isArray(content)){
+      const payload=JSON.parse(content[0].text);return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({block_id:payload.block_id,kind:'body',source_text:String.raw`Use \(\sum x\) in this paragraph.`,uncertain:false,issues:[]})}}]})};
+    }
+    const payload=JSON.parse(content);return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({translation:'额度切换后的译文 '+payload.paragraph})}}]})};
+  };
+  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.equal(routeRequests.filter(r=>r.url.startsWith('http://127.0.0.1:47771')).length,1,'the primary text provider is not retried after quota switches the task');
+  assert.ok(routeRequests.some(r=>r.image&&r.model==='deepseek-flash'),'vision uses the effective provider after the text quota switch');
+  assert.equal(primaryReview.vision.model,'deepseek-flash');assert.equal(primaryReview.translatedWith.provider,'deepseek');
+  elements.get('codex-enabled').checked=false;elements.get('deepseek-model').value='deepseek-chat';
+  resetPrimaryReview();routeRequests.length=0;const screenshotsBeforeUnsupported=imageRequests;
+  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.equal(routeRequests.length,0);assert.equal(imageRequests,screenshotsBeforeUnsupported);
+  assert.match(elements.get('status').textContent,/当前模型 deepseek-chat 不支持图片输入/);
+  elements.get('deepseek-model').value='deepseek-flash';
+  console.log('PASS current-model vision: Codex without DeepSeek, custom API selection, per-model request parameters and text-only rejection before screenshot upload');
+
   const {render,LAYOUT}=await moduleFor('src/render.ts');
   const doc=await PDFDocument.create();const page=doc.addPage([612,792]);
   const font=await doc.embedFont(StandardFonts.TimesRoman);
@@ -756,7 +805,7 @@ try {
       mathCase('b10',255,String.raw`人工改写公式 \(R_1\)。`,true),
       {...mathCase('b11',255,'在此使用 R₁。'),mathSpans:[{...mathCase('unused',255,'').mathSpans[0],rects:[[0,40,249,600,267]],fontSize:5}]},
       {...mathCase('b12',315,'在此使用 R₁。'),mathSpans:[{...mathCase('unused',315,'').mathSpans[0],rects:[[0,75,309,88,327],[0,75,279,88,297]],baselines:[315,285],flow:'wrapped'}]}],terms:[],terminologyReady:true,outputs:[],created:'',updated:''};
-  const visionBlock=mathCase('b13',315,String.raw`图片识别译文：使用 \(R_1\)。`);project.blocks.push(visionBlock);
+  const visionBlock=mathCase('b13',315,String.raw`图片识别译文：使用 \(R_1\)。`+'\n\n定理另起一段，换行不需要字体字形。');project.blocks.push(visionBlock);
   const visionURL='data:image/png;base64,'+Buffer.from(pngBytes).toString('base64');
   visionBlock.vision=await visionTools.recognizeVision({json:async()=>({block_id:'b13',kind:'body',source_text:String.raw`Use \(R_1\) in this paragraph.`,uncertain:false,issues:[]})},
     {baseURL:'https://api.deepseek.com/v1',model:'deepseek-flash',prompt:''},project,visionBlock,
@@ -810,6 +859,7 @@ try {
   assert.deepEqual(placements.find(p=>p.blockID==='b12').mathExpressions,['R_{1}'],'source line wraps cannot imitate a fraction in linear mathematical typesetting');
   assert.deepEqual(placements.find(p=>p.blockID==='b13').mathExpressions,['R_1'],'vision-derived LaTeX renders in an automatic translation without obsolete SDT math bindings');
   assert.ok(!placements.find(p=>p.blockID==='b13').mathReview);assert.equal(visionBlock.source,'Use R_{1} in this paragraph.','PDF generation retains the canonical source');
+  assert.ok(placements.filter(p=>p.blockID==='b13').reduce((n,p)=>n+p.height,0)>40,'multi-paragraph OCR translations retain their line breaks without missing-font errors');
   const divider=LAYOUT.margin+(LAYOUT.width-2*LAYOUT.margin)*.6;
   assert.equal((divider-LAYOUT.margin)/(LAYOUT.width-2*LAYOUT.margin),.6);
   for (const line of wrapStyled(styledRuns('AReallyLongTechnicalIdentifier'.repeat(8)),font,font,11,200))

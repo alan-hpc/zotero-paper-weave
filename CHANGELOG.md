@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-alpha.43
+
+- Make optional image recognition follow the current enabled/configured model and service priority instead of a fixed DeepSeek profile. Keep an active text-quota transition for subsequent vision and repair requests in the same task; image failures do not forward screenshots elsewhere.
+- Support PNG image transcription in the local Codex proxy, forwarding the selected model and private temporary image attachments through `codex exec --image`. Validate image/task boundaries, preserve restricted tool settings, and clean attachments after success, failure or cancellation.
+- Send DeepSeek-specific vision parameters only to DeepSeek models; use standard image detail for other compatible APIs. Reject known text-only models before upload and explain how to update an old local proxy.
+- Fix newline characters being reported as missing font glyphs in multi-paragraph OCR translations. Preserve stored wording and line breaks; include Unicode code points in genuine missing-glyph errors.
+- Pass offline route/proxy/layout regressions, including current-model selection, quota-transition continuity and temporary-file cleanup. Verify one synthetic image through local Codex `gpt-6-luna` and regenerate the reported paper's cached b89 paragraph without model calls or cache writes. Native Zotero installation is not yet accepted for this version.
+
 ## 0.1.0-alpha.42
 
 - Fix Gecko's “Accessing TypedArray data over Xrays” error by cloning binary data into the consuming realm before inspecting it. Apply the same boundary to screenshot ArrayBuffers, PNG cache reads/writes, source PDFs, packaged fonts, workbench transfers and PDF attachment writes.

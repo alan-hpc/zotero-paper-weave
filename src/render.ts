@@ -190,8 +190,8 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
     }
     const content=listText(block,rewritten.text,rewritten.ranges);
     const runs=withFontFallback(styledRuns(content.text,content.ranges),zhChars,monoChars);
-    const absent=[...new Set(runs.flatMap(run=>run.math||run.originalMath?[]:[...run.text].filter(c=>!/[^\S\r\n]/.test(c)&&!(run.mono?monoChars:zhChars).has(c.codePointAt(0)!))))];
-    if(absent.length)throw new Error(`${block.id} 含字体不支持的字符：${absent.slice(0,12).join(' ')}。请修订后重排。`);
+    const absent=[...new Set(runs.flatMap(run=>run.math||run.originalMath?[]:[...run.text].filter(c=>!(/\s/u.test(c))&&!(run.mono?monoChars:zhChars).has(c.codePointAt(0)!))))];
+    if(absent.length)throw new Error(`${block.id} 含字体不支持的字符：${absent.slice(0,12).map(c=>`${c} (U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4,'0')})`).join(' ')}。请修订后重排。`);
     const lines=wrapStyled(runs,zhFont,monoFont,size,ZW-textInset).map(line=>{
       const math=line.runs.filter(run=>run.math||run.originalMath).map(run=>({box:run.originalMath||latexBox(run.math!),size:size*(run.mathScale||1)}));
       const ascent=Math.max(size,...math.map(item=>item.box.ascent*item.size));

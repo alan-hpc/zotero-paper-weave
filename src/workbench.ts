@@ -30,6 +30,7 @@ const requestStates = new Map<string,{state:RequestProgress;started:number}>();
 let phaseKey='',phaseLabel='',phaseStarted=0;
 const TRANSLATION_CONCURRENCY = 3;
 let providerOrder:ProviderName[]=[...PROVIDERS];
+let taskProvider:ProviderName|undefined;
 const priorityActions=PROVIDERS.flatMap(name=>[`${name}-up`,`${name}-down`]);
 const settingActions=[...priorityActions,'save-settings','use-codex-proxy','delete-key','delete-codex-key','delete-deepseek-key'];
 const actions = ['start','terms-action','translate','repair-review','vision-recognize','vision-preview','vision-save','vision-apply','vision-restore','retranslate','import','export','save-edit','save-terms',...settingActions,'prefer-original'];
@@ -119,7 +120,9 @@ async function provider(signal: AbortSignal) {
     ($('settings-panel') as HTMLDetailsElement).open=true;
     throw new Error('没有可调用的模型服务。请至少启用一项并填写地址、模型和 API Key；本机无密钥服务可留空 Key。');
   }
-  const [first,...remaining]=plan.ready,settings=first.settings;
+  const activeIndex=taskProvider?plan.ready.findIndex(p=>p.name===taskProvider):-1;
+  const [first,...remaining]=plan.ready.slice(Math.max(0,activeIndex)),settings=first.settings;
+  taskProvider=first.name;
   $('provider-status').textContent=`当前服务：${PROVIDER_LABELS[first.name]} · 按列表从上到下调用`;
   return { client: new Provider(settings, first.key, signal,(request,requestId='request')=>{
     if(request){
@@ -128,7 +131,7 @@ async function provider(signal: AbortSignal) {
     } else requestStates.delete(requestId);
     tickProgress();
   },{name:first.name,fallbacks:routing.autoFallback?remaining:[],
-    onFallback:(from,to)=>{$('provider-status').textContent=`${from?PROVIDER_LABELS[from]:'前一服务'}额度耗尽，已按优先级切换到 ${PROVIDER_LABELS[to]}；本次任务后续请求使用 ${PROVIDER_LABELS[to]}。`;}
+    onFallback:(from,to)=>{taskProvider=to;$('provider-status').textContent=`${from?PROVIDER_LABELS[from]:'前一服务'}额度耗尽，已按优先级切换到 ${PROVIDER_LABELS[to]}；本次任务后续请求使用 ${PROVIDER_LABELS[to]}。`;}
   }), settings };
 }
 const labels: Record<Kind,string> = { body:'正文', heading:'标题', figure:'图', caption:'图注 / 表注', table:'表格', math:'公式', code:'代码', reference:'参考文献', keep:'保留英文' };
@@ -221,7 +224,7 @@ function changed() {
 async function run(job: (signal: AbortSignal) => Promise<void>) {
   if (busy||switching) return;
   busy = true; abort = new AbortController();
-  started=Date.now();requestStates.clear();phase('准备任务');status('正在准备任务…');
+  started=Date.now();taskProvider=undefined;requestStates.clear();phase('准备任务');status('正在准备任务…');
   $('provider-status').textContent='本次任务尚未请求模型。';
   $('task-progress').setAttribute('data-busy','true');tickProgress();
   progressTimer=setInterval(tickProgress,1000);
@@ -367,16 +370,19 @@ async function repairReview(signal:AbortSignal){
 }
 bind('repair-review',()=>run(repairReview));
 async function visionClient(signal:AbortSignal){
-  const saved=await persistSettings(),profile=saved.routing.deepseek;
-  if(!saved.routing.enabled.deepseek)throw new Error('图片识别需要启用 DeepSeek，并填写其地址、模型和 Key。');
-  if(!['deepseek-flash','deepseek-v4-flash','deepseek-v4-flash-vision-exp'].includes(profile.model))throw new Error('图片识别请将 DeepSeek 模型设为支持图片的 deepseek-flash。');
-  const key=host.apiKey(profile.baseURL);if(!key)throw new Error('尚未保存 DeepSeek API Key，无法识别图片。');
+  const saved=await persistSettings(),plan=planProviders(saved,base=>host.apiKey(base));
+  const chosen=plan.ready.find(p=>p.name===taskProvider)||plan.ready[0];
+  if(!chosen)throw new Error('没有可调用的图片识别模型。请启用模型并填写地址、模型名称及所需 Key。');
+  const {name,settings:profile,key}=chosen;
+  if(/^(?:deepseek-(?:chat|reasoner)|gpt-3\.5(?:-.*)?)$/iu.test(profile.model))
+    throw new Error(`当前模型 ${profile.model} 不支持图片输入。请在模型设置中选择支持图片的模型；本次未上传截图。`);
   const settings={...profile,prompt:''};
-  $('provider-status').textContent=`图片识别：DeepSeek · ${profile.model} · 仅发送当前目标区域截图，不跨服务回退`;
+  taskProvider=name;
+  $('provider-status').textContent=`图片识别：${PROVIDER_LABELS[name]} · ${profile.model} · 跟随当前模型，仅发送目标段落截图，不跨服务回退`;
   const client=new Provider(settings,key,signal,(request,id='图片识别')=>{
     if(request){const previous=requestStates.get(id);requestStates.set(id,{state:request,started:previous&&previous.state.phase===request.phase&&previous.state.attempt===request.attempt?previous.started:Date.now()});}
     else requestStates.delete(id);tickProgress();
-  },{name:'deepseek'});
+  },{name});
   return {client,settings};
 }
 async function recognizeBlock(block:Block,vision:Awaited<ReturnType<typeof visionClient>>,signal:AbortSignal){

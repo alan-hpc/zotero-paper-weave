@@ -14,11 +14,13 @@ The project folder is not automatically synced by PaperWeave.
 Clicking terminology extraction sends translatable text in bounded chunks to the configured API.
 Clicking translation sends individual paragraphs, protected term data, and the paper title.
 Custom prompt preferences are included in translation requests. PDF binaries are not sent.
-By default, terminology and translation send text only. The optional DeepSeek image-recognition
-action sends PNG crops of the selected paragraph to the configured DeepSeek endpoint. The separate,
-default-off "vision before review retranslation" option permits the same image requests for flagged,
-unedited paragraphs when that review action is clicked. Image requests do not fall back to another
-provider. They can incur additional API usage under that provider's policies.
+By default, terminology and translation send text only. Optional image recognition sends PNG crops
+to the currently selected provider/model according to the enabled, complete service priority list.
+If text translation has switched providers after a quota error in that task, subsequent recognition
+uses that selected provider. The default-off vision option permits these requests for flagged,
+unedited paragraphs during the primary PDF workflow or selective review repair. A failed image
+request is never forwarded to another provider. Recognition uses the chosen account's quota and
+data policies; selecting a text-only model can fail without recognition results.
 Local screenshot caches are stored under `paperweave/vision/` with private file permissions. Project
 exports contain recognized English, LaTeX, provenance, edits and recent recognition history, but do
 not embed those PNG files. Source text and previous translations are not replaced by recognition;
@@ -41,11 +43,13 @@ Zotero/OS setup; this project does not promise an additional encryption layer.
 
 ## Optional local Codex proxy
 
-The optional helper listens on 127.0.0.1 and forwards only text translation/terminology tasks to
+The optional helper listens on 127.0.0.1 and forwards translation, terminology and paragraph-image transcription tasks to
 the official Codex CLI. Codex manages its saved ChatGPT authentication; PaperWeave does not read,
 copy or export the authentication file. API-key environment overrides are removed from the child
 process and the helper requires ChatGPT login. Account plan limits and Codex workspace policies
-apply. This does not reuse a current chat's history or custom-GPT knowledge.
+apply. This does not reuse a current chat's history or custom-GPT knowledge. Image requests accept
+bounded embedded PNG data only, never external URLs or user-supplied file paths. Private temporary
+image attachments are passed directly to the CLI and removed after completion, failure or cancellation.
 
 The helper does not log request bodies or credentials. It creates a temporary output-schema file,
 uses ephemeral CLI sessions with translation-unneeded tools disabled, and removes its temporary

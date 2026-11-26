@@ -27,8 +27,11 @@ flowchart LR
 `visionCapture.ts` uses the controller-bound source PDF and `snippets.ts` offscreen print rendering
 to produce bounded paragraph PNGs, cached privately under a source/rectangle-specific identifier.
 `vision.ts` validates the image/page binding and requests structured English/LaTeX from the configured
-DeepSeek profile. Vision requests use explicit inline images, original detail, bounded retries and
-no cross-provider fallback. Default-off automation is limited to the review-retranslation action.
+provider selected by the service priority list or the active task's quota transition. Vision requests
+use explicit inline images, provider-compatible detail, bounded retries and no cross-provider fallback.
+Default-off automation runs before PDF generation and in selective review repair. The local Codex
+proxy validates inline PNGs, creates private temporary attachments and passes them through the CLI's
+image argument while keeping agent tools disabled; no remote URL or client path is dereferenced.
 Recognition is a separate, versioned source layer: canonical SDT text/geometry stays intact,
 adoption precedes translation, and `translationVisionKey` prevents mixing drafts with different
 recognition versions. The workbench supports local preview, editable OCR candidates, explicit
