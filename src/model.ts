@@ -146,7 +146,7 @@ export function validateProject(p: unknown): asserts p is Project {
     if(b.translationVisionKey!==undefined&&!/^[a-f0-9]{16}$/u.test(b.translationVisionKey))throw new Error('图片识别译文绑定无效。');
     if(b.visionHistory!==undefined&&(!Array.isArray(b.visionHistory)||b.visionHistory.length>3))throw new Error('图片识别历史格式无效。');
     for(const v of [...(b.visionHistory||[]),...(b.vision?[b.vision]:[])]){
-      if(v.recognitionVersion!==undefined&&v.recognitionVersion!==2&&v.recognitionVersion!==3)throw new Error('图片识别流程版本无效。');
+      if(v.recognitionVersion!==undefined&&![2,3,4].includes(v.recognitionVersion))throw new Error('图片识别流程版本无效。');
       if(v.sourceStyleRestored!==undefined&&typeof v.sourceStyleRestored!=='boolean')throw new Error('数学样式修复记录无效。');
       if(v.protocol!==1||v.sourceHash!==a.source.hash||v.sourceKey!==a.source.key||v.blockID!==b.id||
         ![v.cacheKey,v.requestKey,v.inputKey,v.blockKey].every(s=>typeof s==='string'&&/^[a-f0-9]{16}$/u.test(s))||

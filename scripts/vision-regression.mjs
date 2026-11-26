@@ -74,6 +74,8 @@ export async function verifyVision(moduleFor){
     assert.ok(block.translation.includes(String.raw`\(j\le h\)`));assert.equal(vision.visionNeedsReview(block),false);
     const spaced=structuredClone(project),fresh=structuredClone(project);
     spaced.extractionVersion=10;fresh.blocks[0].source='The terms with j≤h use cached corrections.';
+    const mathAt=fresh.blocks[0].source.indexOf('j≤h');
+    fresh.blocks[0].mathSpans=[{start:mathAt,end:mathAt+3,representation:'review',rects:[],fontSize:10,baselines:[],features:['fixture'],reason:'canonical SDT remains ambiguous'}];
     const before=structuredClone(spaced.blocks[0].vision);
     assert.equal(reconcileExtraction(spaced,fresh),true);
     assert.equal(vision.visionMatches(spaced,spaced.blocks[0]),true);
@@ -81,6 +83,7 @@ export async function verifyVision(moduleFor){
     assert.equal(spaced.blocks[0].vision.cacheKey,before.cacheKey);
     assert.equal(spaced.blocks[0].vision.rawSourceText,before.rawSourceText);
     assert.equal(spaced.blocks[0].translation,block.translation);assert.equal(vision.visionNeedsReview(spaced.blocks[0]),false);
+    assert.equal(spaced.blocks[0].translationNeedsRefresh,false,'canonical SDT ambiguity cannot invalidate already adopted, source-bound OCR');
     for(const mismatch of [{...fresh.blocks[0],rects:[[0,40,500,500,550]]},{...fresh.blocks[0],source:'Changed source text.'}]){
       const rebound=vision.rebindVisionWhitespace(project,block,mismatch);
       assert.equal(rebound,block.vision,'changed geometry/content is never relabeled as matching OCR');

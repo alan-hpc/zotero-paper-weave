@@ -12,13 +12,13 @@
 
 ## 安装与升级
 
-当前源码版本为 **[0.1.0-alpha.46](docs/releases/v0.1.0-alpha.46.md)**，修复主窗口关闭后截图失败、英文与 API 名称黏连，以及公式括号和字母的破碎轮廓。保留翻译保护、断点恢复和 PDF 核对流程。该版已通过自动检查，Zotero 内验证待完成。
+当前源码版本为 **[0.1.0-alpha.47](docs/releases/v0.1.0-alpha.47.md)**，修复算法碎片误入正文复核、上标脚注误报，以及旧识别状态阻塞；保留 alpha.46 的窗口恢复、单词边界和公式字形修复。该版已通过自动检查，Zotero 内验证待完成。
 
 1. 打开 [GitHub 构建列表](https://github.com/alan-hpc/zotero-paper-weave/actions/workflows/build.yml)，选择 main 分支最新通过的构建，在 **Artifacts** 中下载 `paperweave-build` 并解压。下载构建产物需要登录 GitHub；也可按下文从源码构建。
 2. 在 Zotero 中打开「**工具 → 插件 → 齿轮 → 从文件安装插件**」，选择解压后的 `.xpi`。
 3. 重启 Zotero。升级后原有模型配置、译文和人工修订继续保留。
 
-[Releases](https://github.com/alan-hpc/zotero-paper-weave/releases) 当前最新公开安装包为 **alpha.37**，尚未发布 alpha.46 Release。本页使用说明以 alpha.46 为准。Alpha 版本需手动安装升级。
+[Releases](https://github.com/alan-hpc/zotero-paper-weave/releases) 当前最新公开安装包为 **alpha.37**，尚未发布 alpha.47 Release。本页使用说明以 alpha.47 为准。Alpha 版本需手动安装升级。
 
 ## 第一次翻译
 
@@ -60,6 +60,8 @@
 2. 展开「**当前模型图片识别与原图核对**」，对照截图修正识别原文中的文字、符号和公式。
 3. 修改后点击「**保存识别修订**」，确认内容正确后点击「**采用识别结果（已核对）**」。
 4. 再点击「**翻译并生成 PDF**」，继续重译并生成附件。
+
+「已翻译全部段落」只统计译文数量，识别仍有疑问时还需核对。alpha.47 会显示具体原因；同一图号出现两次却漏读一次仍会拦截，并自动带诊断重新读图一次。算法碎片归入原文整组保留，`¹⁷` 与 `^{17}` 等格式差异不会再被当成数字丢失。旧版未解决的识别会用新版规则重查，已采用和人工修订结果保留。
 
 「**查看原文截图（本地）**」不调用模型；「**图片识别本段（当前模型）**」会上传该段截图。图片识别使用当前服务，不会因失败自动转发到其他服务。详见 [图片识别与修订](docs/VISION.zh-CN.md)、[算法与数学结构处理](docs/DOCUMENT_STRUCTURE.zh-CN.md)。
 

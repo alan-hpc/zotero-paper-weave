@@ -24,6 +24,8 @@ try {
   await verifyDocumentStructure(moduleFor);
   const {verifyStructureRepair}=await import('./structure-repair-regression.mjs');
   await verifyStructureRepair(moduleFor);
+  const {verifyReviewClassification}=await import('./review-classification-regression.mjs');
+  await verifyReviewClassification(moduleFor);
   const {verifyVision}=await import('./vision-regression.mjs');
   await verifyVision(moduleFor);
   const {verifyProtection}=await import('./protection-regression.mjs');
@@ -732,6 +734,9 @@ try {
   assert.equal(elements.get('filter').value,'math-review');assert.equal(elements.get('vision-panel').open,true);
   assert.match(elements.get('status').textContent,/仍需核对.*未生成 PDF/);
   const explicitVisionBefore=visionCalls;
+  elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.equal(visionCalls,explicitVisionBefore,'current-version uncertain OCR stays reviewable without repeated uploads');
+  assert.match(elements.get('status').textContent,/Check the summation boundary/u,'the export hold displays its concrete reason');
   elements.get('vision-apply').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
   assert.equal(primaryReview.vision.active,true);
   elements.get('start').listeners.get('click')();await new Promise(r=>setTimeout(r,0));

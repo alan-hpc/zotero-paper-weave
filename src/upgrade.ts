@@ -5,7 +5,7 @@ import { inlineIdentity, SCRIPT_EXPRESSION, rebaseMathRefs, mathReviewRequired }
 import { applyAuthorMetadata } from './frontMatter';
 import { applyGraphicRegions } from './graphics';
 import { applyProseGroups } from './proseGroups';
-import { rebindVisionWhitespace } from './vision';
+import { rebindVisionWhitespace, visionRenderBlock } from './vision';
 
 export const sourceIdentity=(text:string)=>inlineIdentity(withoutListMarkers(text).text);
 const protectedKinds=new Set(['math','figure','table','caption','code']);
@@ -42,7 +42,7 @@ export function reconcileExtraction(existing:Project,refreshed:Project):boolean 
     const unresolvedScripts=/[_^]\{/u.test(block.source.replace(SCRIPT_EXPRESSION,'').replace(/[_^]\{\d+\}/gu,''));
     if(block.translation.trim()&&!block.edited&&(block.mathSpans?.some(s=>s.representation==='review')||!block.mathSpans?.length&&unresolvedScripts)&&Number(old.translatedWith?.promptVersion||0)<7)
       block.translationNeedsRefresh=true;
-    if(mathReviewRequired(block))block.translationNeedsRefresh=true;
+    if(mathReviewRequired(visionRenderBlock(block)))block.translationNeedsRefresh=true;
     const boundaryRepair=old.source!==fresh.source&&sourceIdentity(old.source)===sourceIdentity(fresh.source)&&
       (existing.extractionVersion||0)<EXTRACTION_VERSION&&retainedSourceArtifact(old,fresh);
     if(boundaryRepair&&old.translation.trim()){

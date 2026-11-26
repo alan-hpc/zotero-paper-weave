@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-alpha.47
+
+- Extend trusted algorithm regions through kernel declarations, comments, parallel loops, numbered steps, assignments and dense table/math fragments. Recognize paragraph-form algorithm captions only with adjacent aligned Input/Require evidence; retain narrative/manual boundaries and complete original crops.
+- Prevent a full-width paragraph below two columns from widening an algorithm into its neighbor. Bound graphic padding in all four directions to adjacent-region midpoints.
+- Compare numeric occurrences across Unicode superscripts/subscripts and TeX without merging exponents into base numbers. Keep duplicate-reference counts strict; show missing/extra numbers and re-read mismatching numeric/type results once using the same images and provider.
+- Use recognition revision 4 to distinguish visible grammar from visual uncertainty, narrative subsection labels from captions, and repeated figure references. Revisit old unresolved candidates while preserving adopted/manual OCR. Validate migrated mathematics against the adopted rendering layer so canonical SDT ambiguity cannot invalidate a bound, accepted translation.
+- Display concrete review reasons in PDF hold messages. Keep PDF generation gates, manual revisions, source identity and service routing unchanged.
+- Add complete-region, neighboring-column, numeric-format/multiplicity, bounded-reread, cancellation, cache-version and adopted-layer regressions. Safely migrate a SonicMoE copy of 502 blocks, retaining all 230 translations and 52 adopted OCR layers. Classify 8 of 12 held blocks as complete algorithm content; retain the other 4 for revised model checks. Inspect actual algorithm PDF output; no live cache writes or real model requests. Native Zotero acceptance remains pending.
+
 ## 0.1.0-alpha.46
 
 - Fix `host.getMainWindow() is null` while capturing source regions after a library window closes. Supply task controllers and packaged-font requests from the application DOM realm so an open workbench no longer depends on a live library window.

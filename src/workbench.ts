@@ -5,7 +5,7 @@ import { formatDuration, requestProgressText } from './progress';
 import { CODEX_DEFAULT, PROVIDERS, PROVIDER_LABELS, resolveSettings } from './settings';
 import { planProviders } from './routing';
 import { applyGraphicRegions } from './graphics';
-import { recognizeVision,activateVision,visionMatches,visionNeedsReview,visionTranslationKey,editVisionText,VisionImage } from './vision';
+import { recognizeVision,activateVision,visionMatches,visionNeedsReview,visionTranslationKey,editVisionText,VisionImage,RECOGNITION_VERSION } from './vision';
 import {copyBytes} from './bytes';
 import {applyProseGroups} from './proseGroups';
 
@@ -138,6 +138,13 @@ async function provider(signal: AbortSignal) {
 }
 const labels: Record<Kind,string> = { body:'正文', heading:'标题', figure:'图', caption:'图注 / 表注', table:'表格', math:'公式', code:'代码', reference:'参考文献', keep:'保留英文' };
 const needsReview=visionNeedsReview;
+function reviewDetails(blocks:Block[]){
+  return blocks.slice(0,3).map(b=>{
+    const reasons=b.vision?.status==='review'&&project&&visionMatches(project,b)?b.vision.issues.join('；'):
+      b.sourceRepairReason|| (b.translationFailure?'译文保护校验未通过':'公式边界或译文对应需要核对');
+    return `${b.id}：${reasons.slice(0,140)}`;
+  }).join('；');
+}
 function translationFailureText(b:Block){
   const f=b.translationFailure!,r=f.recovery,progress=b.translationRecovery;
   const detail=r?`第 ${r.part}/${r.total} 句组：${r.issues.join('；')}。`:`缺少 ${f.missing}、重复 ${f.repeated}、未知 ${f.unknown}。`;
@@ -370,7 +377,7 @@ async function repairReview(signal:AbortSignal,onlyIDs?:Set<string>){
     for(const [index,b]of candidates.entries()){
       phase('图片识别需复核段落',index,candidates.length,'段');
       try{
-        if(b.vision?.status==='review'&&b.vision.recognitionVersion===3&&!b.vision.active&&visionMatches(project!,b)){unresolved.push(b.id);continue;}
+        if(b.vision?.status==='review'&&b.vision.recognitionVersion===RECOGNITION_VERSION&&!b.vision.active&&visionMatches(project!,b)){unresolved.push(b.id);continue;}
         // Explicitly adopted OCR is authoritative even if the model originally
         // reported uncertainty. A retry must not undo the user's review.
         if(b.vision?.active&&visionMatches(project!,b)){eligible.add(b.id);continue;}
@@ -477,10 +484,10 @@ async function generatePDF(signal: AbortSignal) {
 bind('prefer-original', () => run(async () => { await host.preferOriginal(host.item); status('这篇论文已改为优先打开原文。'); }));
 bind('start', () => run(async signal => {
   const awaitingReview=input('vision-before-review').checked&&project!.blocks.find(b=>canTranslate(b)&&b.translationFailure&&
-    b.vision?.status==='review'&&b.vision.recognitionVersion===3&&!b.vision.active&&visionMatches(project!,b));
+    b.vision?.status==='review'&&b.vision.recognitionVersion===RECOGNITION_VERSION&&!b.vision.active&&visionMatches(project!,b));
   if(awaitingReview){
     ($('filter') as HTMLSelectElement).value='math-review';list();select(awaitingReview);($('vision-panel') as HTMLDetailsElement).open=true;
-    status('失败段已有待核对的图片识别结果，本次未重复请求模型。请先核对并采用，再继续生成 PDF。');return;
+    status(`失败段已有待核对的图片识别结果，本次未重复请求模型。${reviewDetails([awaitingReview])}。请先核对区域类型或识别原文，再继续生成 PDF。`);return;
   }
   if(project!.blocks.some(block=>canTranslate(block)&&!block.translation.trim())) {
     const { client, settings } = await provider(signal);
@@ -505,7 +512,7 @@ bind('start', () => run(async signal => {
     if(unresolved.length){
       ($('filter') as HTMLSelectElement).value='math-review';list();select(unresolved[0]);
       ($('vision-panel') as HTMLDetailsElement).open=true;
-      status(`已保存识别及翻译进度；${unresolved.map(b=>b.id).join('、')} 共 ${unresolved.length} 段仍需核对，本次未生成 PDF。请对照原图修订并采用识别结果，再点击「翻译并生成 PDF」。`);
+      status(`已保存识别及翻译进度；${unresolved.map(b=>b.id).join('、')} 共 ${unresolved.length} 段仍需核对，本次未生成 PDF。原因：${reviewDetails(unresolved)}。请在下方核对区域类型或识别原文，正文采用核对结果后再点击「翻译并生成 PDF」。`);
       return;
     }
   }

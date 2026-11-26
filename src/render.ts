@@ -4,7 +4,7 @@ import { Block, Project, ListInfo, canTranslate } from './model';
 import { StyledLine, styledRuns, withFontFallback, wrapStyled, positionLine } from './typography';
 import { bounded } from './async';
 import { translatedBoldRanges } from './formatting';
-import { graphicGroups, GraphicGroup } from './graphics';
+import { graphicGroups, GraphicGroup, graphicCropBox } from './graphics';
 import { listInfo, listText } from './lists';
 import { latexBox, drawLatex } from './latex';
 import { inlineMathPlan } from './mathPresentation';
@@ -112,13 +112,7 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
     const block=visionRenderBlock(savedBlock);
     signal.throwIfAborted();
     for(const group of byAnchor.get(block.id)||[]) {
-      const pageIndex=group.sourcePage,crop=source.getPage(pageIndex).getCropBox(),pad=3;
-      const neighbors=graphics.filter(other=>other!==group&&other.sourcePage===pageIndex&&
-        Math.min(other.box.right,group.box.right)>Math.max(other.box.left,group.box.left));
-      const below=neighbors.filter(other=>other.box.top<=group.box.bottom).map(other=>(group.box.bottom-other.box.top)/2);
-      const above=neighbors.filter(other=>other.box.bottom>=group.box.top).map(other=>(other.box.bottom-group.box.top)/2);
-      const box={left:Math.max(crop.x,group.box.left-pad),bottom:Math.max(crop.y,group.box.bottom-Math.min(pad,...below)),
-        right:Math.min(crop.x+crop.width,group.box.right+pad),top:Math.min(crop.y+crop.height,group.box.top+Math.min(pad,...above))};
+      const pageIndex=group.sourcePage,box=graphicCropBox(group,graphics,pageCrop(source.getPage(pageIndex)));
       if(!(box.right>box.left&&box.top>box.bottom))throw new Error(`${block.id} 的图表裁切范围无效。`);
       const label=`截取原文第 ${pageIndex+1} 页图表 ${group.label||block.id}`;
       const image=await embeddedPage(pageIndex),imageWidth=box.right-box.left,imageHeight=box.top-box.bottom;

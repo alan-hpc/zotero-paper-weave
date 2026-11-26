@@ -5,15 +5,17 @@ import {latexBox} from './latex';
 import {inlineMathPlan} from './mathPresentation';
 import {proseSourceBlock} from './proseGroups';
 import {mathStyleHints,restoreMathWeight} from './mathStyles';
+import {numericCoverage} from './visionNumbers';
 
 export const VISION_PROTOCOL=1;
+export const RECOGNITION_VERSION=4;
 export interface VisionImage {pageIndex:number;box:{left:number;bottom:number;right:number;top:number};dataURL:string;fingerprint:string}
 export interface VisionRecord {
   protocol:1;cacheKey:string;requestKey:string;sourceHash:string;sourceKey:string;blockID:string;inputKey:string;blockKey:string;
   baseURL:string;model:string;created:string;sourceText:string;
   kind:'body'|'heading'|'algorithm'|'figure'|'table'|'caption'|'math';
   status:'ready'|'review';issues:string[];active:boolean;imageFingerprints:string[];rawSourceText:string;manuallyEdited:boolean;
-  recognitionVersion?:2|3;
+  recognitionVersion?:2|3|4;
   sourceStyleRestored?:boolean;
 }
 /** A deterministic cache identifier, not an authentication or security digest. */
@@ -94,7 +96,10 @@ Use complete inline LaTeX \\( ... \\) or display LaTeX \\[ ... \\] for ALL mathe
 Preserve mathematical font weight: use \\mathbf for bold Latin matrix/vector symbols and \\boldsymbol for bold Greek symbols, including symbols carrying accents. Distinguish a tilde, hat and bar from their visible shape; use the high-resolution image rather than the approximate text's flattened spelling.
 If a symbol or boundary cannot be read reliably set uncertain=true and list the issue. Never guess to produce a fluent result. Do not reconstruct graphical content as prose.
 The supplied source region may start or end mid-sentence at a page boundary or next to a displayed equation. Transcribe the visible fragment exactly; a linguistically unfinished sentence is not itself visual uncertainty. Do not invent the continuation.
+Preserve visible grammatical errors as written. Awkward wording or grammar alone is not visual uncertainty and must not appear in issues; do not correct or polish the author's wording.
 A prose paragraph referring to Figure 13, Table 2 or Algorithm 4 is still body text. Classify it as figure/table/algorithm only when the image itself shows that non-prose content, not merely because its prose cites a label.
+A narrative paragraph beginning with a bold subsection label is still body text, including paragraphs explaining plot results. A numbered figure caption is caption; a paragraph discussing measurements is body. Do not classify by topic alone.
+Preserve every visible citation, footnote number, parenthetical figure reference, percentage and hardware model number. Do not omit repeated references such as Figure 17 left and Figure 17 middle.
 Return JSON: {"block_id":"requested ID","kind":"body|heading|algorithm|figure|table|caption|math","source_text":"original English with LaTeX","uncertain":false,"issues":[]}.`;
 export async function recognizeVision(client:Pick<Provider,'json'>,settings:Settings,project:Project,block:Block,images:VisionImage[],signal:AbortSignal):Promise<VisionRecord> {
   signal.throwIfAborted();
@@ -104,14 +109,17 @@ export async function recognizeVision(client:Pick<Provider,'json'>,settings:Sett
   if(images.length!==expected.length||images.some((image,index)=>image.fingerprint!==visionFingerprint(image.dataURL)||
     image.pageIndex!==expected[index].pageIndex||JSON.stringify(image.box)!==JSON.stringify(expected[index].box)))throw new Error('原文截图与目标段落绑定不一致。');
   const styles=mathStyleHints(project,block);
-  const inputKey=visionInputKey(project,block),requestKey=visionFingerprint(JSON.stringify(['recognition-3',inputKey,settings.baseURL,settings.model,images.map(i=>i.fingerprint),images.map(i=>i.box),...(styles.length?[styles]:[])]));
+  const inputKey=visionInputKey(project,block),requestKey=visionFingerprint(JSON.stringify(['recognition-'+RECOGNITION_VERSION,inputKey,settings.baseURL,settings.model,images.map(i=>i.fingerprint),images.map(i=>i.box),...(styles.length?[styles]:[])]));
   if(visionMatches(project,block)&&(block.vision!.manuallyEdited||block.vision!.requestKey===requestKey&&
-    (block.vision!.status!=='review'||block.vision!.recognitionVersion===3)))return block.vision!;
+    (block.vision!.status!=='review'||block.vision!.recognitionVersion===RECOGNITION_VERSION)))return block.vision!;
   const target=proseSourceBlock(block);
+  let reread:{missing:string[];extra:string[];kind:string}|undefined;
+  for(let attempt=0;attempt<2;attempt++){
   const result=await client.json(SYSTEM,{task:'Transcribe the original English region and its mathematical structure.',block_id:block.id,
     approximate_text:target.source,regions:images.map(i=>({source_page:i.pageIndex+1,box:i.box})),paper_title:project.source.title,
+    ...(reread?{recheck:{reason:'Re-read the attached images: the previous transcription did not match numeric coverage or region type. Local extraction is a diagnostic, not permission to invent missing text.',missing_numbers:reread.missing,extra_numbers:reread.extra,previous_kind:reread.kind,expected_kind:block.kind}}:{}),
     ...(styles.length?{mathematical_bold_glyphs:styles}:{})},
-    {images:images.map(i=>i.dataURL),visionTranscription:true,requestId:'图片识别 '+block.id,maxAttempts:2,timeoutMS:120000});
+    {images:images.map(i=>i.dataURL),visionTranscription:true,requestId:'图片识别 '+block.id+(attempt?' · 复查 2/2':''),maxAttempts:2,timeoutMS:120000});
   signal.throwIfAborted();
   try{
   if(result?.block_id!==block.id||!['body','heading','algorithm','figure','table','caption','math'].includes(result?.kind)||
@@ -124,14 +132,19 @@ export async function recognizeVision(client:Pick<Provider,'json'>,settings:Sett
   else if(result.kind!==block.kind)issues.push('识别的正文/标题类型与当前分类不同，请对照原图确认。');
   const ratio=result.source_text.replace(/\\[a-z]+|[\s{}]/giu,'').length/Math.max(1,target.source.replace(/\s/gu,'').length);
   if(ratio<.45||ratio>2.5)issues.push('识别长度与原段落差异较大，需要对照原图确认。');
-  const numbers=(s:string)=>(s.match(/\d+(?:\.\d+)?/gu)||[]).sort().join('|');
-  if(numbers(result.source_text)!==numbers(target.source))issues.push('识别中的数字或编号与本地提取不同，请对照原图核对。');
+  const coverage=numericCoverage(target.source,result.source_text);
+  if(!coverage.matches)issues.push(`识别中的数字或编号与本地提取不同（缺少：${coverage.missing.slice(0,12).join('、')||'无'}；多出：${coverage.extra.slice(0,12).join('、')||'无'}），请对照原图核对。`);
   if(result.uncertain&&!issues.length)issues.push('模型报告了无法确定的文字或数学符号。');
+  if(!attempt&&!result.uncertain&&(!coverage.matches||result.kind!==block.kind)){
+    reread={missing:coverage.missing.slice(0,40),extra:coverage.extra.slice(0,40),kind:result.kind};continue;
+  }
   const sourceText=styled.text.trim();
   return {protocol:VISION_PROTOCOL,cacheKey:visionFingerprint(requestKey+'|'+sourceText),requestKey,inputKey,blockKey:blockKey(block),sourceHash:project.source.hash,sourceKey:project.source.key,blockID:block.id,
     baseURL:settings.baseURL,model:settings.model,created:new Date().toISOString(),sourceText,kind:result.kind,
-    status:issues.length?'review':'ready',issues,active:false,imageFingerprints:images.map(i=>i.fingerprint),rawSourceText:result.source_text.trim(),manuallyEdited:false,recognitionVersion:3,...(styled.restored?{sourceStyleRestored:true}:{})};
+    status:issues.length?'review':'ready',issues,active:false,imageFingerprints:images.map(i=>i.fingerprint),rawSourceText:result.source_text.trim(),manuallyEdited:false,recognitionVersion:RECOGNITION_VERSION,...(styled.restored?{sourceStyleRestored:true}:{})};
   }catch(error){throw Object.assign(new Error(error instanceof Error?error.message:'图片识别结果无效。'),{code:'PW_VISION_INVALID'});}
+  }
+  throw new Error('图片识别复查未完成，已有译文和识别结果已保留。');
 }
 export function editVisionText(project:Project,b:Block,text:string):void {
   if(!visionMatches(project,b))throw new Error('原文已变化，请重新识别后修订。');

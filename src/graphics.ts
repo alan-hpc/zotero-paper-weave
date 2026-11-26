@@ -5,6 +5,20 @@ export interface GraphicGroup {
   anchorID:string;blockIDs:string[];sourcePage:number;box:GraphicBox;
   family:'figure'|'table'|'caption'|'algorithm';label?:string;
 }
+/** Keep padding inside the midpoint to every adjacent graphic, horizontally
+ * as well as vertically, so a complete crop cannot pick up neighboring text.
+ */
+export function graphicCropBox(group:GraphicGroup,groups:GraphicGroup[],crop:GraphicBox,pad=3):GraphicBox {
+  const neighbors=groups.filter(other=>other!==group&&other.sourcePage===group.sourcePage);
+  const vertical=neighbors.filter(other=>Math.min(other.box.right,group.box.right)>Math.max(other.box.left,group.box.left));
+  const horizontal=neighbors.filter(other=>Math.min(other.box.top,group.box.top)>Math.max(other.box.bottom,group.box.bottom));
+  const below=vertical.filter(o=>o.box.top<=group.box.bottom).map(o=>(group.box.bottom-o.box.top)/2);
+  const above=vertical.filter(o=>o.box.bottom>=group.box.top).map(o=>(o.box.bottom-group.box.top)/2);
+  const left=horizontal.filter(o=>o.box.right<=group.box.left).map(o=>(group.box.left-o.box.right)/2);
+  const right=horizontal.filter(o=>o.box.left>=group.box.right).map(o=>(o.box.left-group.box.right)/2);
+  return {left:Math.max(crop.left,group.box.left-Math.min(pad,...left)),right:Math.min(crop.right,group.box.right+Math.min(pad,...right)),
+    bottom:Math.max(crop.bottom,group.box.bottom-Math.min(pad,...below)),top:Math.min(crop.top,group.box.top+Math.min(pad,...above))};
+}
 interface CaptionLabel {family:'figure'|'table';key:string;label:string}
 function captionLabel(source:string):CaptionLabel|undefined {
   const match=source.match(/^(Figure|Fig\.?|Table)\s*([A-Za-z]?\d+(?:\.\d+)?)/iu);
@@ -102,8 +116,11 @@ const contains=(box:GraphicBox,r:Rect)=>r[1]>=box.left-1&&r[3]<=box.right+1&&r[2
 const clean=(s:string)=>s.replace(/^\s*(?:•\s*|\d+[.)]\s+)/u,'');
 const algorithmTitle=(b:Block)=>/^(?:Algorithm|Procedure)\s*\d+(?=\s|[:.)]|[A-Z])/u.test(clean(b.source))&&
   (['heading','caption','code','table'].includes(b.kind)||/\b(?:Input|Output|Require|Ensure)\s*:|←/u.test(b.source));
-const algorithmLine=(b:Block)=>!b.kindEdited&&!b.frontMatter&&b.source.length<650&&
-  /^(?:\d+\s*:|(?:Input|Output|Require|Ensure|Notation)\b|Later,?\s+given\b|(?:return|end\s*(?:if|for|while))\b)/iu.test(clean(b.source));
+const algorithmLine=(b:Block)=>!b.kindEdited&&!b.frontMatter&&
+  (b.source.length<650||b.kind==='table'&&b.source.length<8000&&(b.source.match(/←/gu)||[]).length>=2)&&
+  (/^(?:\d+\s*:|\(\d+\)\s+|\/\/|(?:Input|Output|Require|Ensure|Notation)\b|Later,?\s+given\b|(?:parallel\s+for|return|end\s*(?:if|for|while))\b)/iu.test(clean(b.source))||
+   /\bkernel\s*\([^\n]*\)\s*[→:]/iu.test(b.source)||
+   b.kind==='math'||/^[^.!?]{0,90}←/u.test(clean(b.source)));
 function algorithmCore(b:Block):boolean {
   return algorithmTitle(b)||b.kind==='table'&&/\bAlgorithm\s*\d+/u.test(b.source)&&/\b(?:Input|Output|Require|Ensure)\s*:|←/u.test(b.source);
 }
@@ -111,6 +128,13 @@ function algorithmCore(b:Block):boolean {
 /** Physical regions own their interior text, regardless of SDT's fragmented reading order. */
 export function graphicGroups(project:Project):GraphicGroup[] {
   const groups=sequentialGroups(project),byID=new Map(project.blocks.map((b,i)=>[b.id,{b,i}]));
+  // Some algorithm captions are ordinary paragraph nodes. Require an adjacent,
+  // aligned Input/Require block as physical evidence before claiming the title.
+  const title=(b:Block)=>algorithmTitle(b)||b.kind==='body'&&b.source.length<650&&
+    /^(?:Algorithm|Procedure)\s*\d+\s+[A-Z]/u.test(clean(b.source))&&b.rects.length===1&&
+    project.blocks.some(next=>next!==b&&!next.kindEdited&&/^(?:Input|Require)\b/iu.test(clean(next.source))&&
+      next.rects.length===1&&next.rects[0][0]===b.rects[0][0]&&Math.abs(next.rects[0][1]-b.rects[0][1])<12&&
+      b.rects[0][2]-next.rects[0][4]>=-1&&b.rects[0][2]-next.rects[0][4]<=18);
   // SDT can label a vector plot as a table. Its nearby figure caption owns that core.
   for(const figure of groups.filter(g=>g.family==='figure'&&g.label)){
     const caption=figure.blockIDs.map(id=>byID.get(id)!.b).find(b=>captionLabel(b.source)?.label===figure.label);
@@ -123,7 +147,7 @@ export function graphicGroups(project:Project):GraphicGroup[] {
       figure.box=union(figure.box,candidate.box);figure.blockIDs=[...new Set([...figure.blockIDs,...candidate.blockIDs])];groups.splice(i,1);
     }
   }
-  for(const group of groups)if(group.blockIDs.some(id=>algorithmCore(byID.get(id)!.b))){
+  for(const group of groups)if(group.blockIDs.some(id=>algorithmCore(byID.get(id)!.b)||title(byID.get(id)!.b))){
     group.family='algorithm';group.label ||= group.blockIDs.map(id=>byID.get(id)!.b.source.match(/\bAlgorithm\s*\d+/u)?.[0]).find(Boolean);
   }
   // SDT can split a Symbol/Description table into ordinary paragraph rows.
@@ -144,7 +168,7 @@ export function graphicGroups(project:Project):GraphicGroup[] {
     }
   }
   for(const block of project.blocks){
-    if(block.kindEdited||!algorithmTitle(block))continue;
+    if(block.kindEdited||!title(block))continue;
     for(const sourcePage of new Set(block.rects.map(r=>r[0]))){
       if(groups.some(g=>g.sourcePage===sourcePage&&g.blockIDs.includes(block.id)))continue;
       groups.push({anchorID:block.id,blockIDs:[block.id],sourcePage,box:bounds([block],sourcePage)!,family:'algorithm',
@@ -189,12 +213,15 @@ export function graphicGroups(project:Project):GraphicGroup[] {
   }
   // A title/list-only algorithm still needs the original full-width framing rules.
   for(const group of groups.filter(g=>g.family==='algorithm')){
-    const candidates=project.blocks.filter(b=>b.kind==='body'&&!algorithmLine(b)&&!algorithmTitle(b)&&!b.frontMatter&&b.source.length>80)
+    const candidates=project.blocks.filter(b=>b.kind==='body'&&!algorithmLine(b)&&!title(b)&&!b.frontMatter&&b.source.length>80)
       .flatMap(b=>b.rects).filter(r=>r[0]===group.sourcePage&&Math.abs(r[1]-group.box.left)<12&&r[3]>=group.box.right-2&&
         (r[2]>=group.box.top||r[4]<=group.box.bottom))
       .sort((a,b)=>Math.max(0,a[2]-group.box.top,group.box.bottom-a[4])-Math.max(0,b[2]-group.box.top,group.box.bottom-b[4]));
     const column=candidates[0];
-    if(column&&Math.max(0,column[2]-group.box.top,group.box.bottom-column[4])<140)
+    const crossesNeighbor=column&&groups.some(other=>other!==group&&other.sourcePage===group.sourcePage&&
+      Math.min(other.box.top,group.box.top)>Math.max(other.box.bottom,group.box.bottom)&&
+      other.box.left>=group.box.right-2&&other.box.left<column[3]);
+    if(column&&!crossesNeighbor&&Math.max(0,column[2]-group.box.top,group.box.bottom-column[4])<140)
       group.box={...group.box,left:Math.min(group.box.left,column[1]),right:Math.max(group.box.right,column[3])};
   }
   // Claim a prose block only if ALL its rectangles are covered. Never drop its other page/column.
