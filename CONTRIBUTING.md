@@ -6,7 +6,8 @@ Issues, design feedback, documentation and pull requests are welcome.
 
 Use Node 20.10 or later, `npm ci`, `npm run typecheck`, then `npm run build`.
 Install the resulting XPI into a separate Zotero development profile when validating changes.
-Do not develop against irreplaceable papers or overwrite existing attachments.
+Use disposable source/output copies. Never overwrite original PDFs or edit the live Zotero database
+or project cache directly; exercise generated-output replacement through the host APIs.
 
 Keep host integration, extraction, model access and rendering in their separate modules. Preserve
 manual edits. Version stored data explicitly and document migrations. Add optional features behind
@@ -22,8 +23,9 @@ store files, private papers or an unredacted project export.
 
 Describe what changed, why, and the actual validation performed. Build/typecheck success does not
 establish Zotero runtime correctness. A stable release requires the real application checks listed
-in the roadmap. Tests may be introduced in a dedicated contribution; no automated test suite is
-claimed by this alpha.
+in the roadmap. Run `npm test` for the offline regression suite, including real PDF generation, formula recovery,
+source isolation, output replacement and injected persistence failures. Host mocks do not replace
+native Zotero acceptance checks.
 
 ## Licensing
 

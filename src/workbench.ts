@@ -11,6 +11,8 @@ import {recoverFormulaImages} from './formulaRecovery';
 import {formulaImagesMatch} from './formulaImages';
 import {copyBytes} from './bytes';
 import {applyProseGroups} from './proseGroups';
+import {inlineMathPlan} from './mathPresentation';
+import {visionRenderBlock} from './vision';
 
 async function initialize() {
 const host = (window as any).arguments[0];
@@ -144,7 +146,7 @@ const needsReview=visionNeedsReview;
 function reviewDetails(blocks:Block[]){
   return blocks.slice(0,3).map(b=>{
     const reasons=b.vision?.status==='review'&&project&&visionMatches(project,b)?b.vision.issues.join('；'):
-      b.sourceRepairReason|| (b.translationFailure?'译文保护校验未通过':'公式边界或译文对应需要核对');
+      b.sourceRepairReason||inlineMathPlan(visionRenderBlock(b)).latexIssues.join('；')|| (b.translationFailure?'译文保护校验未通过':'公式边界或译文对应需要核对');
     return `${b.id}：${reasons.slice(0,140)}`;
   }).join('；');
 }
@@ -502,6 +504,7 @@ async function generatePDF(signal: AbortSignal) {
   if(preserved.length)status(`PDF 已生成；自动复查后 ${preserved.length} 段保留原文图像，其余正文已翻译。无需逐段确认，已有中文和诊断已保存。${result.preferenceError?'优先打开未生效：'+result.preferenceError:''}`);
   const hybrid=project!.blocks.filter(b=>formulaImagesMatch(project!,b));
   if(hybrid.length&&!preserved.length)status(`PDF 已生成；${hybrid.length} 段中文及公式位置已自动核验，${hybrid.reduce((n,b)=>n+b.formulaImages!.crops.length,0)} 处公式按原貌嵌入，中文正文完整保留。${result.preferenceError?'优先打开未生效：'+result.preferenceError:''}`);
+  if(result.outputWarning)status(`PDF 已保存；${result.outputWarning}。`);
 }
 bind('prefer-original', () => run(async () => { await host.preferOriginal(host.item); status('这篇论文已改为优先打开原文。'); }));
 bind('start', () => run(async signal => {

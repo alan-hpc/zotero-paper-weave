@@ -14,6 +14,7 @@ import { captureVisionImages } from './visionCapture';
 import { visionMatches } from './vision';
 import { copyBytes,ByteSource } from './bytes';
 import { applyProseGroups } from './proseGroups';
+import {persistOutput,refreshOutput} from './outputs';
 
 let meta: { id: string; version: string; rootURI: string };
 const menus = new Map<any, { nodes: any[]; popup: any; listener: any }>();
@@ -25,7 +26,6 @@ let active = false;
 let stopping=false,lifecycle=0;
 let workbenchOpening:Promise<void>|undefined;
 let preferred: PreferredAttachments;
-let indexWrites = Promise.resolve();
 const pref = 'extensions.paperweave.';
 const origin = 'chrome://paperweave';
 const realm = (base: string) => endpoint(base);
@@ -198,39 +198,23 @@ export async function preferOriginal(item: any) {
 }
 export async function attachPDF(item: any, project: Project, bytes: Uint8Array, makePreferred = true) {
   if (!active) throw new Error('插件已停用。');
-  await sourceBytes(item, project); // Check identity immediately before importing.
-  if (!Zotero.Libraries.get(item.libraryID).editable || !Zotero.Libraries.get(item.libraryID).filesEditable) {
-    throw new Error('当前文库不可写入附件。请复制至可编辑文库后操作。');
+  const parent=item.parentID?await Zotero.Items.getAsync(item.parentID):undefined;
+  const {attachment,updated,consolidated}=await persistOutput(item,project,bytes,{
+    readIndex:async()=>await readJSON(PathUtils.join(directory(),'outputs.json'))||{},
+    writeIndex:async index=>{await ensureDir();await writeJSON(PathUtils.join(directory(),'outputs.json'),index);},
+    saveProject,preferredKey:parent?preferred.choiceFor(parent):undefined,
+    checkSource:async()=>{if(!active)throw new Error('插件已停用。');await sourceBytes(item,project);}
+  });
+  Zotero.Prefs.set(pref + 'preferBilingual', makePreferred, true);
+  let preferredSet=false,preferenceError='';
+  if(makePreferred&&parent){
+    try{await preferred.select(parent,attachment);preferredSet=true;}
+    catch(e:any){preferenceError=e.message;}
   }
-  const stamp = now().replace(/[:.]/g, '-');
-  const filename = `PaperWeave-${item.key}-${stamp}.pdf`;
-  const temp = PathUtils.join(Zotero.getTempDirectory().path, filename);
-  await IOUtils.write(temp, Cu.cloneInto(bytes,IOUtils), { permissions: 0o600 });
-  try {
-    const args: any = { file: temp, title: `${project.source.title}__${stamp.slice(0,19)}`,
-      fileBaseName: filename.slice(0,-4), renameIfAllowedType: false };
-    if (item.parentID) args.parentItemID = item.parentID;
-    else { args.libraryID = item.libraryID; args.collections = item.getCollections(); }
-    const attachment = await Zotero.Attachments.importFromFile(args);
-    project.outputs.push({ key: attachment.key, created: now() });
-    await saveProject(project);
-    indexWrites = indexWrites.catch(() => {}).then(async () => {
-      const path = PathUtils.join(directory(), 'outputs.json');
-      const index = await readJSON(path) || {};
-      index[`${attachment.libraryID}:${attachment.key}`] = { libraryID: item.libraryID, key: item.key };
-      await writeJSON(path, index);
-    });
-    await indexWrites;
-    Zotero.Prefs.set(pref + 'preferBilingual', makePreferred, true);
-    let preferredSet = false;
-    let preferenceError = '';
-    if (makePreferred && item.parentID) {
-      try { await preferred.select(await Zotero.Items.getAsync(item.parentID), attachment); preferredSet = true; }
-      catch (e: any) { preferenceError = e.message; }
-    }
-    await Zotero.Reader.open(attachment.id);
-    return { key: attachment.key, preferredSet, preferenceError };
-  } finally { await IOUtils.remove(temp, { ignoreAbsent: true }); }
+  let outputWarning=await refreshOutput(attachment);
+  try{await Zotero.Reader.open(attachment.id);}
+  catch(e){Zotero.logError?.(e);outputWarning=[outputWarning,'阅读器打开失败，请从附件列表重新打开'].filter(Boolean).join('；');}
+  return {key:attachment.key,preferredSet,preferenceError,updated,consolidated,outputWarning};
 }
 export async function exportProject(window: any, project: Project) {
   const { FilePicker } = ChromeUtils.importESModule('chrome://zotero/content/modules/filePicker.mjs');

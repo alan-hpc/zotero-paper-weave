@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {PDFDocument} from 'pdf-lib';
 import {binaryBoundaryFixture} from './binary-fixture.mjs';
 
 export async function verifyPaperSessions(moduleFor){
@@ -172,7 +173,7 @@ export async function verifyPaperSessions(moduleFor){
     Zotero.Prefs.set=()=>{};IOUtils.remove=async()=>{};
     Zotero.Reader.open=async id=>{assert.equal(id,4,'open the generated attachment after saving');};
     Zotero.Attachments.importFromFile=async args=>{imports++;assert.equal(args.parentItemID,replay.parentID);return{id:4,key:'NEWPDF04',libraryID:1};};
-    const attachment=await replayBridge.attachPDF(replay,projectFor(replay),new Uint8Array([37,80,68,70]),false);
+    const attachment=await replayBridge.attachPDF(replay,projectFor(replay),await (async()=>{const pdf=await PDFDocument.create();pdf.addPage();return pdf.save();})(),false);
     assert.equal(attachment.key,'NEWPDF04');assert.equal(imports,1);
     assert.ok(imagePaths.some(path=>path.endsWith('.pdf')),'PDF output uses the same cloned binary write boundary');
   }finally{

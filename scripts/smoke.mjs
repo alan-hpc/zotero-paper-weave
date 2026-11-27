@@ -48,6 +48,8 @@ try {
   await verifyCodexProxy();
   const {verifyWorkbenchWindows}=await import('./workbench-window-regression.mjs');
   await verifyWorkbenchWindows(moduleFor);
+  const {verifyOutputLifecycle}=await import('./output-lifecycle-regression.mjs');
+  await verifyOutputLifecycle(moduleFor);
   const {verifyPaperSessions}=await import('./paper-session-regression.mjs');
   await verifyPaperSessions(moduleFor);
   const {PreferredAttachments}=await moduleFor('src/preferred.ts');

@@ -43,6 +43,7 @@ export class PreferredAttachments {
     const selected = await parent.getBestAttachment();
     if (selected?.key !== attachment.key) throw new Error('其他插件可能影响了附件顺序，请在附件列表中打开双语 PDF。');
   }
+  choiceFor(parent: any): string|undefined { return this.choices[`${parent.libraryID}:${parent.key}`]; }
   private async clearCaches() {
     for (const key of Object.keys(this.choices)) {
       const [libraryID, itemKey] = key.split(':');

@@ -3,6 +3,7 @@ import {scriptLatex,inlineMathText,mathReviewRequired} from './inlineMath';
 import {latexBox} from './latex';
 import {formulaImagesCurrent} from './formulaImages';
 import type {OriginalMathMetrics} from './typography';
+import {styledRuns} from './typography';
 
 const symbols:Record<string,string>={
   α:'alpha',β:'beta',γ:'gamma',δ:'delta',ε:'epsilon',ζ:'zeta',η:'eta',θ:'theta',ι:'iota',κ:'kappa',λ:'lambda',μ:'mu',ν:'nu',ξ:'xi',π:'pi',ρ:'rho',σ:'sigma',τ:'tau',υ:'upsilon',φ:'phi',χ:'chi',ψ:'psi',ω:'omega',
@@ -49,7 +50,16 @@ export function inlineMathPlan(block:Block,ranges:TextRange[]=[],limits?:{size:n
     return (span.flow==='wrapped'?widths.reduce((a,b)=>a+b,0):Math.max(...widths,0))*limits.size>limits.width*2;
   });
   const sourceReview=!!block.sourceRepairReason&&!!block.translationNeedsRefresh;
+  // Preflight the exact runs used by PDF layout, including explicit saved TeX
+  // and legacy scripts. A local glyph failure must become a recoverable review
+  // decision, not an unlabelled crash after the UI reported zero pending items.
+  const latexIssues:string[]=[];
+  const prose=rewritten.text.replace(/\uE000PWMS[0-9]+\uE001/gu,m=>' '.repeat(m.length));
+  for(const run of styledRuns(prose,rewritten.ranges)){
+    if(!run.math)continue;
+    try{latexBox(run.math);}catch(e:any){latexIssues.push(`${run.math.slice(0,120)}：${e.message}`);}
+  }
   const checked=imageProof?{...block,mathSpans:block.mathSpans!.map(s=>({...s,representation:'source' as const}))}:block;
-  return{rewritten,originals,uncertainInline,oversized,sourceReview,
-    needsReview:mathReviewRequired(checked,rewritten)||uncertainInline||oversized||sourceReview};
+  return{rewritten,originals,uncertainInline,oversized,sourceReview,latexIssues,
+    needsReview:mathReviewRequired(checked,rewritten)||uncertainInline||oversized||sourceReview||latexIssues.length>0};
 }

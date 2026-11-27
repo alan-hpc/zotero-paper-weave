@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-alpha.51
+
+- Keep one active generated PDF per paper: reuse the preferred generated attachment or the newest known output, preserve key/title/path and annotation records, and update its source-revision mapping. Isolate standalone PDFs and libraries; never identify ownership by title.
+- Validate PDF bytes before mutation, atomically replace the stored file, mark it for sync through Zotero APIs, and serialize output mutations across add-on contexts. Roll back file/provenance/project failures; recover missing PDFs without deleting sidecars or changing attachment keys.
+- Trash historical generated duplicates only after a successful commit. Keep their annotations recoverable, reject missing/conflicting provenance and report cleanup failures with a retry path. Refresh search caches and open readers after commit. Annotation coordinates are retained, not remapped after reflow.
+- Fix MathJax U+00A0 space outlines in saved TeX, including SonicMoE italic phrases and log comparisons. Preserve space advances and invisible-operator layout; retain strict visible-glyph/path checks and reject formulas containing only invisible glyphs. Preflight saved math runs so invalid automatic TeX enters the existing recovery flow.
+- Add real-file replacement, annotation/key/path preservation, multi-revision/library isolation, missing-file, invalid-PDF, rollback, cleanup-retry and concurrent-creation regressions. Reuse a 502-region SonicMoE copy to generate 61 pages with zero model requests and unchanged saved Chinese; no live cache/attachment writes. Native Zotero installation acceptance remains pending.
+
 ## 0.1.0-alpha.50
 
 - Close the gap between saved Chinese and uncertain mathematics: independently verify cached prose and source-bound formula placement, retain existing wording, and embed only reliable original mathematical outlines. Repair prose from images only when needed; stage candidates until independent checks pass.

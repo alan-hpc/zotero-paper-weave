@@ -21,6 +21,7 @@ export async function verifySvgCurves(moduleFor){
   for(const tex of [String.raw`(e,r)`,String.raw`m^s(e,r)`,String.raw`rem^E(e,r)=r`,String.raw`\Gamma_r^{DP}=\{(e,r)\mid e\in[0,E)\}`,
     String.raw`\left(\frac{x}{y}\right)`,String.raw`\begin{pmatrix}a&b\\c&d\end{pmatrix}`,String.raw`\sqrt{x^2+y^2}`,String.raw`\sum_{i=0}^{N}e^{x_i}`,
     String.raw`\log(x)`,String.raw`\sin(x)+\cos(x)+\exp(y)`,
+    String.raw`\mathit{without\ any\ adaptation}`,String.raw`(\log_2(n)\text{ vs. }\log_2(d))`,
     String.raw`\ell_m(\mathbf{x}) = g_m(\mathbf{x}) - g_{\mathrm{pub},m}(\mathbf{x}) = \log(\alpha_m/\alpha_{\mathrm{pub}})`]){
     const box=latexBox(tex);assert.ok(box.shapes.length);assert.ok(box.width>0&&box.ascent+box.descent>0);
     const paths=[];
@@ -29,5 +30,7 @@ export async function verifySvgCurves(moduleFor){
     assert.ok(paths.every(p=>!/[QqTtSs]/u.test(p)),'all smooth/quadratic glyph curves reach PDF as explicit cubic paths');
   }
   assert.throws(()=>latexBox(''),/为空/);assert.throws(()=>latexBox('\u2061'),/图形尺寸/,'an all-invisible formula cannot masquerade as a rendered expression');
+  assert.throws(()=>latexBox(String.raw`\text{ }`),/图形尺寸/,'space alone is not a rendered expression');
+  assert.ok(latexBox(String.raw`a\ b`).width>latexBox('ab').width,'invisible space advance remains in formula metrics');
   console.log('PASS mathematical glyph outlines: exact curves, strict malformed paths, parentheses/fractions/matrices, invisible function operators, log/sin/cos/exp and DistMoE routing log odds');
 }

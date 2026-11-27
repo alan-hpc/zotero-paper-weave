@@ -85,7 +85,7 @@ export interface Project {
   terminologyReady: boolean;
   /** Completed per-paper terminology requests, saved so a long analysis can resume. */
   terminologyBatches?: TermBatch[];
-  outputs: { key: string; created: string }[];
+  outputs: { key: string; created: string; updated?: string }[];
   created: string;
   updated: string;
 }

@@ -164,7 +164,7 @@ The preference is local and is not synced across devices.
 - `terminologyReady`: distinguishes an intentionally empty glossary from one not yet generated.
 - `terminologyBatches`: optional fingerprinted results for each completed terminology request;
   older schema-1 projects without this field remain valid and gain resumable checkpoints on analysis.
-- `outputs`: generated attachment keys and creation times.
+- `outputs`: the active generated attachment key, creation time and last-update time; historical arrays are consolidated on successful generation.
 - `schema`, `pluginVersion`, `created`, `updated`: format evolution and provenance.
 
 Projects are stored by source key and hash. Writes use a temporary file then replacement. Saves
@@ -185,9 +185,15 @@ persistence and other failures stop new scheduling while in-flight work can fini
 aborts requests.
 Manual text persists across rebuilds.
 Explicit single-block retranslation overwrites that block. Changing a glossary does not invalidate
-or silently retranslate earlier human edits. New PDFs are added as new attachments, and an output
-index maps them back to their original project on the same machine. Old PDF annotations remain
-on old attachments. Automatic migration of annotation positions is outside this alpha.
+or silently retranslate earlier human edits. The first PDF is imported as a stored attachment. Later generations validate PDF bytes, reuse the
+same attachment key/title/path, atomically replace the file and mark it for upload through Zotero
+APIs. A process-wide queue serializes file/provenance/cleanup mutations. File and metadata failures
+restore the prior copy; only after commit are other proven PaperWeave outputs under the same parent
+trashed recoverably. Standalone sources are isolated. Titles alone never establish ownership.
+The reverse output index maps the retained attachment to the current original source revision.
+The chosen attachment retains its annotation records; duplicate annotations remain with the trashed
+attachments. Reflow can shift annotation locations; automatic remapping is outside this alpha.
+Search caches and open readers are refreshed after commit; refresh failures are reported separately.
 
 ## Extension points
 

@@ -106,6 +106,13 @@ export async function verifyMathPipeline(moduleFor){
   const unsupported={...block,source:unsupportedSource,translation:'使用 ∑x。',mathSpans:[span(unsupportedSource,'∑x')],translationNeedsRefresh:false};
   assert.equal(inlineMathPlan(unsupported).uncertainInline,true);
   assert.equal(visionNeedsReview(unsupported),true,'unsupported source math is eligible for vision before a PDF is generated');
+  const brokenTex={...unsupported,mathSpans:[],translation:String.raw`错误的 \(\frac{x}{\)`,translationNeedsRefresh:false};
+  assert.equal(inlineMathPlan(brokenTex).needsReview,true,'invalid saved TeX is preflighted before PDF layout');
+  assert.equal(inlineMathPlan(brokenTex).latexIssues.length,1);
+  assert.equal(visionNeedsReview(brokenTex),true,'invalid automatic math enters the existing recovery flow');
+  assert.equal(inlineMathPlan({...brokenTex,translation:'代码 `'+String.raw`\(\frac{x}{\)`+'`'}).needsReview,false,'code content is not parsed as mathematics');
+  for(const translation of [String.raw`无需 \(\mathit{without\ any\ adaptation}\)`,String.raw`比较 \((\log_2(n)\text{ vs. }\log_2(d))\)`])
+    assert.equal(inlineMathPlan({...brokenTex,translation}).needsReview,false,'legitimate TeX spaces need no model repair');
   const project={source:{title:'Math binding regression'},terms:[{source:'kernel',reason:'fixture'}]};
   const provider=new Provider({baseURL:'https://example.test/v1',model:'mock',prompt:''},'',new AbortController().signal);
   provider.json=async(_system,payload)=>{
