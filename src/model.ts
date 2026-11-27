@@ -1,5 +1,6 @@
 import type {VisionRecord} from './vision';
 import {fingerprint} from './fingerprint';
+import {FormulaImageProof,FormulaCheckpoint,validFormulaCrops,validFormulaSubset} from './formulaImages';
 export type Kind = 'body' | 'heading' | 'figure' | 'caption' | 'table' | 'math' | 'code' | 'reference' | 'keep';
 /** PDF user space: origin bottom left; [pageIndex, x0, y0, x1, y1]. */
 export type Rect = [number, number, number, number, number];
@@ -36,7 +37,10 @@ export interface Block {
   vision?:VisionRecord;
   visionHistory?:VisionRecord[];
   /** Explicit terminal content decision after bounded automatic recovery; wording is retained. */
-  automaticOriginal?:{version:1;libraryID:number;sourceKey:string;sourceHash:string;inputKey:string;reason:string;at:string;model:string;evidence:string[]};
+  automaticOriginal?:{version:1;recoveryVersion?:2;libraryID:number;sourceKey:string;sourceHash:string;inputKey:string;reason:string;at:string;model:string;evidence:string[]};
+  /** Chinese prose independently verified against the PDF; only formulas use original outlines. */
+  formulaImages?:FormulaImageProof;
+  formulaProgress?:FormulaCheckpoint;
   translationVisionKey?:string;
   proseGroup?:{memberIDs:string[];source:string;rects:Rect[]};
   proseGroupAnchor?:string;
@@ -168,6 +172,28 @@ export function validateProject(p: unknown): asserts p is Project {
         typeof r.at!=='string'||!Number.isFinite(Date.parse(r.at))||typeof r.model!=='string'||r.model.length>400||
         !Array.isArray(r.evidence)||!r.evidence.length||r.evidence.length>12||r.evidence.some(s=>!/^[a-f0-9]{16}$/u.test(s)))
         throw new Error('自动保留原文记录与论文不匹配或格式无效。');
+    }
+    if(b.formulaImages){const r=b.formulaImages;
+      if(r.version!==1||r.libraryID!==a.source.libraryID||r.sourceKey!==a.source.key||r.sourceHash!==a.source.hash||
+        ![r.inputKey,r.wordingKey].every(k=>typeof k==='string'&&/^[a-f0-9]{16}$/u.test(k))||!validFormulaCrops(b,r.crops)||
+        typeof r.model!=='string'||r.model.length>400||typeof r.baseURL!=='string'||r.baseURL.length>2000||
+        !['cached','retranslated'].includes(r.mode)||typeof r.at!=='string'||!Number.isFinite(Date.parse(r.at))||
+        !Array.isArray(r.evidence)||!r.evidence.length||r.evidence.length>256||r.evidence.some(s=>typeof s!=='string'||!/^[a-f0-9]{16}$/u.test(s)))
+        throw new Error('公式原图与中文译文的核验记录无效或来自其他论文。');
+    }
+    if(b.formulaProgress){const r=b.formulaProgress;
+      if(r.version!==1||r.libraryID!==a.source.libraryID||r.sourceKey!==a.source.key||r.sourceHash!==a.source.hash||
+        ![r.key,r.wordingKey].every(k=>typeof k==='string'&&/^[a-f0-9]{16}$/u.test(k))||typeof r.at!=='string'||!Number.isFinite(Date.parse(r.at))||
+        !Array.isArray(r.approved)||!validFormulaSubset(b,r.approved.map(p=>p.crop))||r.approved.some(p=>!/^[a-f0-9]{16}$/u.test(p.fingerprint)))
+        throw new Error('公式自动恢复的进度无效或来自其他论文。');
+      if(r.rejected&&(!Array.isArray(r.rejected)||r.rejected.length>72||r.rejected.some(p=>!validFormulaSubset(b,[p.crop])||!/^[a-f0-9]{16}$/u.test(p.fingerprint))))throw new Error('公式恢复的候选检查记录无效。');
+      if(r.proseChecked!==undefined&&typeof r.proseChecked!=='boolean')throw new Error('中文核验的恢复状态无效。');
+      if(r.draft){const d=r.draft;
+        if(typeof d.text!=='string'||!d.text.trim()||d.text.length>26000||!Array.isArray(d.boldRanges)||d.boldRanges.some(v=>!Number.isInteger(v.start)||!Number.isInteger(v.end)||v.start<0||v.end<=v.start||v.end>d.text.length)||
+          d.mathRefs!==undefined&&(!Array.isArray(d.mathRefs)||d.mathRefs.some(v=>!Number.isInteger(v.start)||!Number.isInteger(v.end)||v.start<0||v.end<=v.start||v.end>d.text.length||!Number.isInteger(v.sourceIndex)||v.sourceIndex<0||v.sourceIndex>=(b.mathSpans?.length||0)))||
+          d.source&&(typeof d.source.model!=='string'||d.source.model.length>400||d.source.provider!==undefined&&!['codex','deepseek','custom'].includes(d.source.provider)))
+          throw new Error('公式恢复中的候选译文格式无效。');
+      }
     }
     if(b.visionHistory!==undefined&&(!Array.isArray(b.visionHistory)||b.visionHistory.length>3))throw new Error('图片识别历史格式无效。');
     for(const v of [...(b.visionHistory||[]),...(b.vision?[b.vision]:[])]){

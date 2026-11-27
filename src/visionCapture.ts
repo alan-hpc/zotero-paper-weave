@@ -1,10 +1,10 @@
 import type {Block,Project} from './model';
-import {visionCrops,visionInputKey,visionFingerprint,pngDataURL,VisionImage,VisionMode} from './vision';
+import {visionCrops,visionInputKey,visionFingerprint,pngDataURL,VisionImage,CaptureMode} from './vision';
 
 export interface VisionImageStore {read:(key:string)=>Promise<Uint8Array|null>;write:(key:string,data:Uint8Array)=>Promise<void>}
 export async function captureVisionImages(project:Project,block:Block,
   draw:(page:number,box:VisionImage['box'],signal:AbortSignal,progress:(s:string)=>void)=>Promise<Uint8Array>,
-  store:VisionImageStore,signal:AbortSignal,progress:(s:string)=>void,mode:VisionMode='paragraph'):Promise<VisionImage[]> {
+  store:VisionImageStore,signal:AbortSignal,progress:(s:string)=>void,mode:CaptureMode='paragraph'):Promise<VisionImage[]> {
   const inputKey=visionInputKey(project,block),output:VisionImage[]=[];
   const regions=visionCrops(project,block,mode);
   for(const [index,region]of regions.entries()){

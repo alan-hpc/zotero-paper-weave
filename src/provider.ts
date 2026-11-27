@@ -96,7 +96,7 @@ function addBoldMarkup(text: string, ranges: TextRange[]): string {
   }
   return marked;
 }
-function parseBoldMarkup(text: string, expected: number): { text: string; boldRanges: TextRange[] } | null {
+export function parseBoldMarkup(text: string, expected: number): { text: string; boldRanges: TextRange[] } | null {
   const markers=[...text.matchAll(/\*\*/gu)];
   if(markers.length!==expected*2)return null;
   let plain='',cursor=0,start=-1;
@@ -413,6 +413,25 @@ Return {"terms":[{"source":"exact phrase occurring in the text","reason":"short 
     }
     throw new Error(`${block.id} 翻译失败。`);
   }
+  /** Independent image-grounded recovery; mathematical values stay in local locks. */
+  async translateWithFormulaImages(block:Block,project:Project,images:string[]):Promise<TranslationResult>{
+    const plan=prepareTranslation(block,project),request=protectedTranslation({paragraph:plan.paragraph,placeholders:plan.placeholders,boldCount:plan.boldCount},plan.registry);
+    let previous:unknown,issues:string[]=[];
+    for(let attempt=0;attempt<2;attempt++){
+      this.signal.throwIfAborted();
+      const result=await this.json(SYSTEM+'\n'+SLOT_INSTRUCTIONS+'\nUse the paragraph images to read prose and understand its context. Mathematical source values may be lossy extraction. Keep their references exactly once; original formula images will be placed locally. Do not invent LaTeX or change a mathematical value.',
+        {task:'Translate prose while retaining source-bound original formulas.',block_id:block.id,paragraph:request.paragraph,protectedSlots:request.protectedSlots,
+          paperTitle:project.source.title,...(attempt?{previousDraft:previous,repairIssues:issues}:{})},
+        {images,visionTranscription:true,requestId:block.id+' · 原公式保真翻译',maxAttempts:2,timeoutMS:120000});
+      const assembled=request.assemble(result);issues=assembled.issues;
+      const formatted=!issues.length&&parseBoldMarkup(assembled.text,plan.boldCount);
+      if(formatted){const restored=translationResult(block,plan.registry.restore(formatted.text,formatted.boldRanges),this.sourceFor(result));
+        if(/[\p{Script=Han}]/u.test(restored.text))return restored;issues.push('普通正文尚未译为中文');
+      }else if(!issues.length)issues.push('加粗范围不完整');
+      previous=result;
+    }
+    throw new TranslationProtectionError(block.id,{missing:[],repeated:[],unknown:issues,valid:false},true);
+  }
   private async recoverTranslationParts(block:Block,project:Project,system:string,plan:ReturnType<typeof prepareTranslation>):Promise<TranslationResult>{
     const parts=translationParts(plan.paragraph,plan.placeholders,true),drafts:string[]=[],sources:TranslationSource[]=[];
     const protectedValues=plan.placeholders.map(t=>plan.registry.value(t));
@@ -492,6 +511,8 @@ export interface RequestProgress {
 }
 export function recordTranslation(b: Block, result: TranslationResult, settings: Settings) {
   delete b.automaticOriginal;
+  delete b.formulaImages;
+  delete b.formulaProgress;
   b.translation = result.text; b.translationBoldRanges=result.boldRanges;
   b.translationMathRefs=result.mathRefs;
   b.edited = false; b.translationNeedsRefresh = false;delete b.sourceRepairReason;delete b.translationFailure;delete b.translationRecovery;

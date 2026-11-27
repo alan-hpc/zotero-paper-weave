@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.0-alpha.50
+
+- Close the gap between saved Chinese and uncertain mathematics: independently verify cached prose and source-bound formula placement, retain existing wording, and embed only reliable original mathematical outlines. Repair prose from images only when needed; stage candidates until independent checks pass.
+- Reject direct publishing of formula crops whose source geometry is marked unreliable. Read only that expression, validate TeX/number coverage, and independently verify it against the PDF before replacing its display. Keep the existing Chinese and neighboring approved formulas. Preserve atomic function arguments beside image-bound function names.
+- Save per-batch source/configuration/image/wording-bound checkpoints, approved and rejected crop candidates, and staged Chinese. Resume remaining checks after service interruption or restart without regenerating the candidate or overwriting old wording. Revisit alpha.49 original-preservation results through the new recovery path.
+- Audit final PDF region coverage, placement bounds and exact formula occurrence counts before attaching. Re-enter bounded automatic repair if rendering finds unresolved automatic math. Use actual prose columns for displayed-equation numbering so short fragments cannot narrow the crop.
+- Extend the restricted Codex proxy with image-grounded translation, Chinese/crop review and mathematical-transcription verification. Retain loopback, strict task/schema/input validation, disabled tools, private temporary files, cancellation and no cross-provider image fallback. Codex users need the alpha.50 companion proxy.
+- On an isolated 501-region DistMoE copy, retain every saved Chinese paragraph unchanged, verify b59's 14 math occurrences (13 original glyph regions and one independently checked TeX recovery), and generate the complete 56-page PDF. Confirm cached rerender uses zero model requests. Native Zotero installation acceptance remains pending; no live project-cache or source-attachment writes.
+
 ## 0.1.0-alpha.49
 
 - Replace opt-in automatic review's human-confirmation holds with bounded source-bound completion. Re-read diagnostics, add owned high-resolution math details, adopt only validated prose and retranslate with existing protection checks. Persist explicit original-preservation receipts for content that remains uncertain; render the corresponding complete source region and retain old Chinese and diagnostics. Service, identity, disk and cancellation failures remain errors.

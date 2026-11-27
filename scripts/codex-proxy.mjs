@@ -14,6 +14,9 @@ const translationSchema={type:'object',properties:{translation:{type:'string'}},
 const termsSchema={type:'object',properties:{terms:{type:'array',items:{type:'object',properties:{source:{type:'string'},reason:{type:'string'}},required:['source','reason'],additionalProperties:false}}},required:['terms'],additionalProperties:false};
 const visionKinds=['body','heading','algorithm','figure','table','caption','math'];
 const visionSchema={type:'object',properties:{block_id:{type:'string'},kind:{type:'string',enum:visionKinds},source_text:{type:'string'},uncertain:{type:'boolean'},issues:{type:'array',items:{type:'string'}}},required:['block_id','kind','source_text','uncertain','issues'],additionalProperties:false};
+const formulaReviewSchema={type:'object',properties:{block_id:{type:'string'},kind:{type:'string',enum:visionKinds},prose_ok:{type:'boolean'},uncertain:{type:'boolean'},issues:{type:'array',items:{type:'string'}},
+  math:{type:'array',items:{type:'object',properties:{index:{type:'integer'},complete:{type:'boolean'},isolated:{type:'boolean'},corresponds:{type:'boolean'}},required:['index','complete','isolated','corresponds'],additionalProperties:false}}},required:['block_id','kind','prose_ok','uncertain','issues','math'],additionalProperties:false};
+const formulaTexSchema={type:'object',properties:{block_id:{type:'string'},formula_index:{type:'integer'},faithful:{type:'boolean'},uncertain:{type:'boolean'},issues:{type:'array',items:{type:'string'}}},required:['block_id','formula_index','faithful','uncertain','issues'],additionalProperties:false};
 class ProxyError extends Error {constructor(status,code,message){super(message);Object.assign(this,{status,code});}}
 export function codexFailure(diagnostic){
   // A busy local queue or transient rate limit is not exhausted subscription quota.
@@ -46,7 +49,7 @@ export async function runCodex({system,input,kind,images=[],signal,model,timeout
   const directory=await mkdtemp(join(tmpdir(),'paperweave-codex-'));
   try{
     const schemaFile=join(directory,'output-schema.json');
-    await writeFile(schemaFile,JSON.stringify(kind==='terms'?termsSchema:kind==='vision'?visionSchema:translationSchema),{mode:0o600});
+    await writeFile(schemaFile,JSON.stringify(kind==='terms'?termsSchema:kind==='vision'?visionSchema:kind==='formula-review'?formulaReviewSchema:kind==='formula-tex'?formulaTexSchema:translationSchema),{mode:0o600});
     const imageFiles=[];
     for(const [index,bytes]of images.entries()){
       const path=join(directory,`region-${index+1}.png`);await writeFile(path,bytes,{mode:0o600});imageFiles.push(path);
@@ -94,6 +97,10 @@ export async function runCodex({system,input,kind,images=[],signal,model,timeout
         }
         let value;try{value=JSON.parse(final);}catch{finish(new ProxyError(502,'invalid_json','Codex 未返回有效的翻译 JSON。'));return;}
         const valid=kind==='vision'?value?.block_id===input.block_id&&visionKinds.includes(value.kind)&&typeof value.source_text==='string'&&!!value.source_text.trim()&&value.source_text.length<=26000&&typeof value.uncertain==='boolean'&&Array.isArray(value.issues)&&value.issues.every(s=>typeof s==='string'):
+          kind==='formula-review'?value?.block_id===input.block_id&&visionKinds.includes(value.kind)&&typeof value.prose_ok==='boolean'&&typeof value.uncertain==='boolean'&&
+            Array.isArray(value.issues)&&value.issues.length<=20&&value.issues.every(s=>typeof s==='string')&&Array.isArray(value.math)&&value.math.length===input.math_regions?.length&&
+            new Set(value.math.map(m=>m?.index)).size===value.math.length&&value.math.every(m=>input.math_regions.some(r=>r.index===m?.index)&&[m?.complete,m?.isolated,m?.corresponds].every(v=>typeof v==='boolean')):
+          kind==='formula-tex'?value?.block_id===input.block_id&&value.formula_index===input.formula_index&&typeof value.faithful==='boolean'&&typeof value.uncertain==='boolean'&&Array.isArray(value.issues)&&value.issues.length<=20&&value.issues.every(s=>typeof s==='string'):
           kind==='terms'?Array.isArray(value?.terms)&&value.terms.every(t=>typeof t?.source==='string'&&typeof t.reason==='string'):
           typeof value?.translation==='string'&&!!value.translation.trim();
         if(!valid){finish(new ProxyError(502,'invalid_output','Codex 返回的翻译结构不完整。'));return;}
@@ -128,9 +135,15 @@ function paperRequest(body){
   if(Buffer.byteLength(text)+Buffer.byteLength(messages[0].content)>LIMIT)throw new ProxyError(413,'input_limit','论文文字过长。');
   let input;try{input=JSON.parse(text);}catch{throw new ProxyError(400,'invalid_paper_request','论文请求数据不是有效 JSON。');}
   if(parts){
-    if(parts.length<2||input?.task!==VISION_TASK||typeof input.block_id!=='string'||!input.block_id||input.block_id.length>128||
-      typeof input.approximate_text!=='string'||input.approximate_text.length>26000||!Array.isArray(input.regions)||input.regions.length!==parts.length-1)
-      throw new ProxyError(400,'unsupported_task','图片请求仅用于原文段落识别。');
+    const vision=input?.task===VISION_TASK&&typeof input.approximate_text==='string'&&input.approximate_text.length<=26000&&Array.isArray(input.regions)&&input.regions.length===parts.length-1;
+    const review=input?.task==='Verify Chinese prose and original formula crops against the PDF.'&&typeof input.english_prose==='string'&&input.english_prose.length<=26000&&
+      typeof input.chinese_prose==='string'&&input.chinese_prose.length<=26000&&Array.isArray(input.math_regions)&&input.math_regions.length>0&&input.math_regions.length<=5&&
+      input.math_regions.every(r=>Number.isInteger(r?.index)&&r.index>=0&&r.index<24&&Number.isInteger(r.image_index)&&r.image_index>=1&&r.image_index<parts.length-1)&&new Set(input.math_regions.map(r=>r.index)).size===input.math_regions.length;
+    const translate=input?.task==='Translate prose while retaining source-bound original formulas.'&&typeof input.paragraph==='string'&&input.paragraph.length<=26000&&
+      Array.isArray(input.protectedSlots)&&input.protectedSlots.length<=256&&input.protectedSlots.every(s=>typeof s?.reference==='string'&&typeof s?.source==='string');
+    const tex=input?.task==='Verify a source-bound mathematical transcription.'&&Number.isInteger(input.formula_index)&&input.formula_index>=0&&input.formula_index<24&&typeof input.latex==='string'&&input.latex.length<=4096;
+    if(parts.length<2||!vision&&!review&&!translate&&!tex||typeof input.block_id!=='string'||!input.block_id||input.block_id.length>128)
+      throw new ProxyError(400,'unsupported_task','图片请求仅用于原文识别、公式与译文核验或保真翻译。');
     const images=parts.slice(1).map(p=>{
       const url=p.image_url.url,match=/^data:image\/png;base64,([A-Za-z0-9+/]+={0,2})$/u.exec(url);
       if(!match||url.length>9*LIMIT)throw new ProxyError(400,'invalid_images','只接受内嵌的有效 PNG，不读取网址或文件路径。');
@@ -143,7 +156,7 @@ function paperRequest(body){
       return bytes;
     });
     if(images.reduce((n,b)=>n+b.length,0)>18*LIMIT)throw new ProxyError(413,'input_limit','图片请求合计过大。');
-    return{system:messages[0].content,input,kind:'vision',images,requestedModel:body.model};
+    return{system:messages[0].content,input,kind:vision?'vision':review?'formula-review':tex?'formula-tex':'image-translation',images,requestedModel:body.model};
   }
   const kind=typeof input?.paper==='string'?'terms':typeof input?.paragraph==='string'?'translation':undefined;
   if(!kind)throw new ProxyError(400,'unsupported_task','代理只处理术语识别与逐段翻译。');
@@ -167,7 +180,7 @@ export function createProxy({runner=runCodex,model,concurrency=2,maxQueue=3}={})
       if(![`127.0.0.1:${port}`,`localhost:${port}`].includes(host))throw new ProxyError(403,'host_denied','仅允许本机地址。');
       const origin=request.headers.origin;
       if(origin&&!['null','chrome://paperweave'].includes(origin))throw new ProxyError(403,'origin_denied','不接受网页来源的请求。');
-      if(request.method==='GET'&&request.url==='/health'){send(200,{service:'paperweave-codex-proxy',model:MODEL_ALIAS,capabilities:{images:true,visionProtocol:1},active,queued:queue.length});return;}
+      if(request.method==='GET'&&request.url==='/health'){send(200,{service:'paperweave-codex-proxy',model:MODEL_ALIAS,capabilities:{images:true,visionProtocol:1,formulaReview:1},active,queued:queue.length});return;}
       if(request.method==='GET'&&request.url==='/v1/models'){send(200,{object:'list',data:[{id:MODEL_ALIAS,object:'model',owned_by:'local-codex'}]});return;}
       if(request.method!=='POST'||request.url!=='/v1/chat/completions')throw new ProxyError(404,'not_found','接口不存在。');
       if(!/^application\/json(?:;|$)/i.test(request.headers['content-type']||''))throw new ProxyError(415,'content_type','只接受 application/json 请求。');

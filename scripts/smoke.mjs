@@ -26,6 +26,8 @@ try {
   await verifyStructureRepair(moduleFor);
   const {verifyReviewClassification}=await import('./review-classification-regression.mjs');
   await verifyReviewClassification(moduleFor);
+  const {verifyFormulaRecovery}=await import('./formula-recovery-regression.mjs');
+  await verifyFormulaRecovery(moduleFor);
   const {verifyAutomaticReview}=await import('./automatic-review-regression.mjs');
   await verifyAutomaticReview(moduleFor);
   const {verifyVision}=await import('./vision-regression.mjs');
@@ -907,6 +909,12 @@ try {
   const automaticOriginal=mathCase('b14',285,'');project.blocks.push(automaticOriginal);
   automaticOriginal.automaticOriginal={version:1,libraryID:1,sourceKey:'SOURCE01',sourceHash:'synthetic',inputKey:blockInputKey(automaticOriginal),
     reason:'Ambiguous source after two bounded image passes.',at:new Date().toISOString(),model:'test-vision',evidence:[visionTools.visionFingerprint(visionURL)]};
+  const {formulaInputKey,formulaWordingKey,formulaCrops}=await moduleFor('src/formulaImages.ts');
+  const formulaChinese=mathCase('b15',285,'原有中文保留：使用 R_{1}。');project.blocks.push(formulaChinese);
+  formulaChinese.mathSpans[0].features=['stacked-layout'];
+  const formulaAt=formulaChinese.translation.indexOf('R_{1}');formulaChinese.translationMathRefs=[{start:formulaAt,end:formulaAt+5,sourceIndex:0}];
+  formulaChinese.formulaImages={version:1,libraryID:1,sourceKey:'SOURCE01',sourceHash:'synthetic',inputKey:formulaInputKey(formulaChinese),wordingKey:formulaWordingKey(formulaChinese),
+    model:'test-vision',baseURL:'https://example.test/v1',at:new Date().toISOString(),mode:'cached',crops:formulaCrops(formulaChinese),evidence:[visionTools.visionFingerprint(visionURL)]};
   const sourceBytes=await doc.save(),fontBytes=new Uint8Array(await readFile('addon/chrome/content/fonts/NotoSerifSC-Regular.ttf'));
   const monoBytes=new Uint8Array(await readFile('addon/chrome/content/fonts/SarasaMonoSC-Regular.ttf'));
   const fontkit=(await import('@pdf-lib/fontkit')).default;
@@ -959,9 +967,22 @@ try {
   assert.equal(automaticallyPreserved.sourcePreserved,true);assert.equal(automaticallyPreserved.mathReview,false);
   assert.equal(automaticallyPreserved.kind,'formula');assert.ok(automaticallyPreserved.sourceBox.bottom<=278&&automaticallyPreserved.sourceBox.top>=298,'original preservation includes the complete source region');
   assert.equal(automaticOriginal.translation,'','preservation never invents Chinese or clears uncertainty to pass the incomplete guard');
-  const staleOriginal=structuredClone(project);staleOriginal.blocks.at(-1).source+=' Changed.';
+  const staleOriginal=structuredClone(project);staleOriginal.blocks.find(b=>b.id==='b14').source+=' Changed.';
   await assert.rejects(render(staleOriginal,sourceBytes,fontBytes,false,new AbortController().signal,()=>{}),/未翻译/,'stale source receipts cannot bypass incomplete translation validation');
   assert.ok(placements.filter(p=>p.blockID==='b13').reduce((n,p)=>n+p.height,0)>40,'multi-paragraph OCR translations retain their line breaks without missing-font errors');
+  const argumentMarker='\uE000PWMS0\uE001';
+  const argumentRuns=styledRuns('padding '+argumentMarker+'(·) ends',[],new Map([[argumentMarker,{key:'argument',width:1.5,ascent:1,descent:.2,index:0}]]));
+  const argumentLines=wrapStyled(argumentRuns,font,font,10,28);
+  const argumentLine=argumentLines.find(line=>line.runs.some(run=>run.originalMath));
+  const argumentIndex=argumentLine.runs.findIndex(run=>run.originalMath);
+  assert.equal(argumentLine.runs[argumentIndex+1].math,String.raw`(\cdot )`,'an image-bound function name and its mathematical argument stay on the same line');
+  const hybridPlacement=placements.filter(p=>p.blockID==='b15');
+  assert.ok(hybridPlacement.every(p=>p.kind==='text'&&!p.mathReview),'formula uncertainty cannot replace verified Chinese with a whole-paragraph screenshot');
+  assert.deepEqual(hybridPlacement.flatMap(p=>p.inlineMathSources),[0],'the original formula is drawn exactly once inline with cached Chinese');
+  assert.equal(formulaChinese.translation,'原有中文保留：使用 R_{1}。');
+  const {auditRenderCoverage}=await moduleFor('src/render.ts','-audit');
+  assert.throws(()=>auditRenderCoverage(project,placements.filter(p=>p.blockID!=='b15')),/缺少区域/,'missing translated content fails before attachment');
+  assert.throws(()=>auditRenderCoverage(project,placements.map(p=>p.blockID==='b15'?{...p,inlineMathSources:[0,0]}:p)),/出现次数/,'duplicated original formulas fail the final output audit');
   const stacked={...project,blocks:[
     {id:'eq12',kind:'math',source:'D = 1 (12)',translation:'',edited:false,rects:[[0,160,396.96,525.4,426.06]]},
     {id:'eq13',kind:'math',source:'K = 1 (13)',translation:'',edited:false,rects:[[0,214,381.45,525.4,392.76]]},

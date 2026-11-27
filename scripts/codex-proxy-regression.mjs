@@ -19,10 +19,10 @@ export async function verifyCodexProxy(){
   const recognized={block_id:'b1',kind:'body',source_text:String.raw`A matrix uses \(x_1\).`,uncertain:false,issues:[]};
   const server=createProxy({model:'configured-default',concurrency:2,runner:async({input,kind,images,signal,model})=>{
     requestedModels.push(model);
-    if(kind==='vision'){visionInputs.push(images);assert.ok(images.every(b=>b.equals(png)));}
+    if(['vision','formula-review','image-translation'].includes(kind)){visionInputs.push(images);assert.ok(images.every(b=>b.equals(png)));}
     calls++;active++;maximum=Math.max(maximum,active);
     try{await new Promise((resolve,reject)=>{const t=setTimeout(resolve,5);signal.addEventListener('abort',()=>{clearTimeout(t);reject(Object.assign(new Error('cancelled'),{status:499}));},{once:true});});
-      return{value:kind==='vision'?recognized:kind==='terms'?{terms:[]}:{translation:input.paragraph},model:MODEL_ALIAS};
+      return{value:kind==='vision'?recognized:kind==='formula-review'?{block_id:input.block_id,kind:'body',prose_ok:true,uncertain:false,issues:[],math:input.math_regions.map(r=>({index:r.index,complete:true,isolated:true,corresponds:true}))}:kind==='formula-tex'?{block_id:input.block_id,formula_index:input.formula_index,faithful:true,uncertain:false,issues:[]}:kind==='terms'?{terms:[]}:{translation:input.paragraph},model:MODEL_ALIAS};
     }finally{active--;}
   }});
   await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
@@ -30,7 +30,7 @@ export async function verifyCodexProxy(){
   const body=paragraph=>({model:MODEL_ALIAS,messages:[{role:'system',content:'Translate faithfully.'},{role:'user',content:JSON.stringify({paragraph,placeholders:[]})}]});
   const post=(value,headers={})=>fetch(url+'/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(value)});
   try{
-    const health=await(await fetch(url+'/health')).json();assert.equal(health.service,'paperweave-codex-proxy');assert.equal(health.capabilities.images,true);
+    const health=await(await fetch(url+'/health')).json();assert.equal(health.service,'paperweave-codex-proxy');assert.equal(health.capabilities.images,true);assert.equal(health.capabilities.formulaReview,1);
     const response=await post(body('中文和 R_{1} 保持完整。'));
     assert.equal(response.status,200);assert.equal(JSON.parse((await response.json()).choices[0].message.content).translation,'中文和 R_{1} 保持完整。');
     assert.equal(requestedModels[0],'configured-default','the default alias honors the configured backend model');
@@ -56,6 +56,15 @@ export async function verifyCodexProxy(){
     const wrongTask=structuredClone(visionBody);wrongTask.messages[1].content[0].text='{"paragraph":"not an image-transcription task"}';assert.equal((await post(wrongTask)).status,400);
     const noImage=structuredClone(visionBody);noImage.messages[1].content.pop();assert.equal((await post(noImage)).status,400);
     assert.equal(calls,visionCalls,'invalid images and unrelated image tasks never reach the runner');
+    const review=structuredClone(visionBody);review.messages[1].content.push(structuredClone(review.messages[1].content[1]));
+    review.messages[1].content[0].text=JSON.stringify({task:'Verify Chinese prose and original formula crops against the PDF.',block_id:'b1',english_prose:'Use [M0].',chinese_prose:'使用 [M0]。',math_regions:[{index:0,image_index:1}]});
+    const reviewed=await post(review);assert.equal(reviewed.status,200);assert.equal(JSON.parse((await reviewed.json()).choices[0].message.content).prose_ok,true);
+    const imageTranslation=structuredClone(visionBody);imageTranslation.messages[1].content[0].text=JSON.stringify({task:'Translate prose while retaining source-bound original formulas.',block_id:'b1',paragraph:'Use <r0/>.',protectedSlots:[{reference:'<r0/>',source:'x_1'}]});
+    const translated=await post(imageTranslation);assert.equal(translated.status,200);assert.equal(JSON.parse((await translated.json()).choices[0].message.content).translation,'Use <r0/>.');
+    const texReview=structuredClone(visionBody);texReview.messages[1].content[0].text=JSON.stringify({task:'Verify a source-bound mathematical transcription.',block_id:'b1',formula_index:0,latex:'x_1'});
+    const texResponse=await post(texReview);assert.equal(texResponse.status,200);assert.equal(JSON.parse((await texResponse.json()).choices[0].message.content).faithful,true);
+    const badReview=structuredClone(review);badReview.messages[1].content[0].text=JSON.stringify({task:'Verify Chinese prose and original formula crops against the PDF.',block_id:'b1',english_prose:'Use [M0].',chinese_prose:'使用 [M0]。',math_regions:[{index:0,image_index:20}]});
+    assert.equal((await post(badReview)).status,400,'a formula cannot refer to an unattached image');
     console.log('PASS local Codex proxy: loopback HTTP adapter, Unicode, restricted CLI flags, bounded parallelism and request validation');
   }finally{await new Promise(resolve=>server.close(resolve));}
   // Exercise the real spawn/file/cleanup path with a deterministic offline CLI.
@@ -70,10 +79,10 @@ const input=JSON.parse(text.slice(text.indexOf('\\n')+1)).untrusted_paper_input;
 const args=process.argv.slice(2),files=args.flatMap((v,i)=>v==='--image'?[args[i+1]]:[]);
 if(files.length!==2||!args.includes('view_image')||!args.includes('--ignore-user-config'))process.exit(3);
 const modes=[];for(const file of files){const bytes=await fs.readFile(file);if(bytes[0]!==137)process.exit(4);modes.push((await fs.stat(file)).mode&511);}
-const schema=JSON.parse(await fs.readFile(args[args.indexOf('--output-schema')+1],'utf8'));if(!schema.required.includes('source_text'))process.exit(5);
+const schema=JSON.parse(await fs.readFile(args[args.indexOf('--output-schema')+1],'utf8'));if(!schema.required.includes(input.formulaReview?'prose_ok':'source_text'))process.exit(5);
 await fs.writeFile(process.env.PAPERWEAVE_TEST_TRACE,JSON.stringify({files,modes,directory:args[args.indexOf('--cd')+1]}));
 if(input.waitForAbort){setInterval(()=>{},1000);}else{
-process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify({block_id:input.block_id,kind:'body',source_text:'A matrix uses x.',uncertain:false,issues:[]})}})+'\\n'+JSON.stringify({type:'turn.completed'})+'\\n');}
+process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify(input.formulaReview?{block_id:input.block_id,kind:'body',prose_ok:true,uncertain:false,issues:[],math:[{index:0,complete:true,isolated:true,corresponds:true}]}:{block_id:input.block_id,kind:'body',source_text:'A matrix uses x.',uncertain:false,issues:[]})}})+'\\n'+JSON.stringify({type:'turn.completed'})+'\\n');}
 `,{mode:0o700});
     process.env.PAPERWEAVE_CODEX_BIN=binary;process.env.PAPERWEAVE_TEST_TRACE=trace;
     process.env.OPENAI_API_KEY='offline-test-key';process.env.CODEX_API_KEY='offline-test-key';process.env.OPENAI_BASE_URL='https://example.test';
@@ -81,6 +90,8 @@ process.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_mes
     assert.equal(result.value.block_id,'b1');assert.equal(result.model,'gpt-6-luna');
     let recorded=JSON.parse(await readFile(trace,'utf8'));assert.deepEqual(recorded.modes,[0o600,0o600]);
     for(const file of [...recorded.files,recorded.directory])await assert.rejects(access(file),{code:'ENOENT'});
+    const reviewed=await runCodex({system:'verify',input:{block_id:'b1',formulaReview:true,math_regions:[{index:0}]},kind:'formula-review',images:[png,png],model:'gpt-6-luna',signal:new AbortController().signal});
+    assert.equal(reviewed.value.prose_ok,true);assert.deepEqual(reviewed.value.math,[{index:0,complete:true,isolated:true,corresponds:true}]);
     await rm(trace);const stop=new AbortController(),pending=runCodex({system:'transcribe',input:{block_id:'b1',waitForAbort:true},kind:'vision',images:[png,png],signal:stop.signal});
     const deadline=Date.now()+5000;while(Date.now()<deadline){try{await access(trace);break;}catch{await new Promise(r=>setTimeout(r,10));}}
     stop.abort();await assert.rejects(pending,e=>e.code==='cancelled');recorded=JSON.parse(await readFile(trace,'utf8'));

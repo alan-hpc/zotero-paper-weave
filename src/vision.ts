@@ -8,11 +8,13 @@ import {mathStyleHints,restoreMathWeight} from './mathStyles';
 import {numericCoverage} from './visionNumbers';
 import {fingerprint} from './fingerprint';
 import {blockInputKey} from './model';
+import {formulaCrops,formulaImagesCurrent} from './formulaImages';
 
 export const VISION_PROTOCOL=1;
 export const RECOGNITION_VERSION=5;
 export type VisionMode='paragraph'|'context';
-export interface VisionImage {pageIndex:number;box:{left:number;bottom:number;right:number;top:number};dataURL:string;fingerprint:string;role?:'detail'}
+export type CaptureMode=VisionMode|'formula-tight'|'formula-wide'|'formula-isolated';
+export interface VisionImage {pageIndex:number;box:{left:number;bottom:number;right:number;top:number};dataURL:string;fingerprint:string;role?:'detail';formulaIndex?:number}
 export interface VisionRecord {
   protocol:1;cacheKey:string;requestKey:string;sourceHash:string;sourceKey:string;blockID:string;inputKey:string;blockKey:string;
   baseURL:string;model:string;created:string;sourceText:string;
@@ -38,8 +40,8 @@ export function rebindVisionWhitespace(project:Project,old:Block,fresh:Block):Vi
   if(!visionMatches(project,old)||compact(old.source)!==compact(fresh.source)||geometry(old)!==geometry(fresh))return old.vision;
   return {...old.vision!,inputKey:visionInputKey(project,fresh),blockKey:blockKey(fresh)};
 }
-export const visionNeedsReview=(b:Block)=>!b.originalGraphic&&!b.proseGroupAnchor&&!b.frontMatter&&(b.kind==='body'||b.kind==='heading')&&
-  (!!b.translationFailure||!!b.translationRecovery||!!b.translationNeedsRefresh||!!b.sourceRepairReason||inlineMathPlan(visionRenderBlock(b)).needsReview||visionRenderBlock(b).mathSpans?.some(s=>s.representation==='review')===true);
+export const visionNeedsReview=(b:Block)=>!formulaImagesCurrent(b)&&!b.originalGraphic&&!b.proseGroupAnchor&&!b.frontMatter&&(b.kind==='body'||b.kind==='heading')&&
+  (!!b.formulaProgress||!!b.translationFailure||!!b.translationRecovery||!!b.translationNeedsRefresh||!!b.sourceRepairReason||inlineMathPlan(visionRenderBlock(b)).needsReview||visionRenderBlock(b).mathSpans?.some(s=>s.representation==='review')===true);
 
 export function pngDataURL(bytes:Uint8Array):string {
   if(bytes.length<33||bytes.length>6*1024*1024||![137,80,78,71,13,10,26,10].every((v,i)=>bytes[i]===v)||
@@ -56,7 +58,8 @@ export function pngDataURL(bytes:Uint8Array):string {
   }
   parts.push(chunk);return 'data:image/png;base64,'+parts.join('');
 }
-export function visionCrops(project:Project,block:Block,mode:VisionMode='paragraph'):{pageIndex:number;box:VisionImage['box'];role?:'detail'}[] {
+export function visionCrops(project:Project,block:Block,mode:CaptureMode='paragraph'):{pageIndex:number;box:VisionImage['box'];role?:'detail';formulaIndex?:number}[] {
+  if(mode==='formula-tight'||mode==='formula-wide'||mode==='formula-isolated')return formulaCrops(block,mode==='formula-isolated'?2:mode==='formula-wide'?1:0).map(c=>({pageIndex:c.rect[0],box:{left:c.rect[1],bottom:c.rect[2],right:c.rect[3],top:c.rect[4]},role:'detail',formulaIndex:c.index}));
   block=proseSourceBlock(block);
   if(!block.rects.length||block.rects.length>6)throw new Error('本段区域过多，请先按原文检查分段；图片识别每段最多 6 个区域。');
   const regions=block.rects.map((r:Rect)=>{
@@ -168,6 +171,8 @@ export function editVisionText(project:Project,b:Block,text:string):void {
   if(text.trim()===v.sourceText)return;
   v.sourceText=text.trim();v.cacheKey=visionFingerprint(v.requestKey+'|'+v.sourceText);v.manuallyEdited=true;v.active=false;v.status='ready';
   delete b.automaticOriginal;
+  delete b.formulaImages;
+  delete b.formulaProgress;
   if(b.translationVisionKey){b.translationNeedsRefresh=true;b.sourceRepairReason='图片识别原文已人工修订，译文需要复核或重译。';}
 }
 export function activateVision(project:Project,b:Block,reviewed=false):void {
@@ -176,6 +181,8 @@ export function activateVision(project:Project,b:Block,reviewed=false):void {
   if(b.vision!.status!=='ready'&&!reviewed)throw new Error('图片识别仍有疑问，需要先对照原图确认。');
   b.vision!.active=true;
   delete b.automaticOriginal;
+  delete b.formulaImages;
+  delete b.formulaProgress;
   if(b.translation.trim()&&b.translationVisionKey!==b.vision!.cacheKey){b.translationNeedsRefresh=true;b.sourceRepairReason='已采用图片识别，旧译文需要复核或重译。';}
 }
 /** Retain the canonical SDT source/geometry; use a separate, explicit recognition layer. */
@@ -193,6 +200,7 @@ export function visionSourceBlock(b:Block):Block {
 }
 export const visionTranslationKey=(b:Block)=>b.vision?.active&&b.vision.blockKey===blockKey(b)?b.vision.cacheKey:undefined;
 export function visionRenderBlock(b:Block):Block {
+  if(formulaImagesCurrent(b))return {...b,sourceRepairReason:undefined,translationNeedsRefresh:false};
   if(b.vision?.active&&b.vision.blockKey===blockKey(b)&&b.translationVisionKey===b.vision.cacheKey)return {...visionSourceBlock(b),sourceRepairReason:undefined,translationNeedsRefresh:false};
   if(b.translationVisionKey||b.vision?.active)return {...proseSourceBlock(b),sourceRepairReason:'图片识别与当前译文版本不同，需复核或重译。',translationNeedsRefresh:true};
   if(b.proseGroup&&!b.edited)return {...proseSourceBlock(b),sourceRepairReason:'正文与行内数学的拆分已修复，需要按完整段落识别并重译。',translationNeedsRefresh:true};

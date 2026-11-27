@@ -6,6 +6,7 @@ import { applyAuthorMetadata } from './frontMatter';
 import { applyGraphicRegions } from './graphics';
 import { applyProseGroups } from './proseGroups';
 import { rebindVisionWhitespace, visionRenderBlock } from './vision';
+import {formulaImagesMatch,formulaInputKey,formulaWordingKey} from './formulaImages';
 
 export const sourceIdentity=(text:string)=>inlineIdentity(withoutListMarkers(text).text);
 const protectedKinds=new Set(['math','figure','table','caption','code']);
@@ -34,6 +35,10 @@ export function reconcileExtraction(existing:Project,refreshed:Project):boolean 
     block.vision=rebindVisionWhitespace(existing,old,fresh);block.visionHistory=old.visionHistory;block.translationVisionKey=old.translationVisionKey;
     delete block.automaticOriginal;
     if(automaticOriginalMatches(existing,{...block,automaticOriginal:old.automaticOriginal}))block.automaticOriginal=old.automaticOriginal;
+    delete block.formulaImages;
+    if(formulaImagesMatch(existing,{...block,formulaImages:old.formulaImages}))block.formulaImages=old.formulaImages;
+    delete block.formulaProgress;
+    if(formulaInputKey(old)===formulaInputKey(block)&&formulaWordingKey(old)===formulaWordingKey(block))block.formulaProgress=old.formulaProgress;
     if(old.source===fresh.source){block.translationFailure=old.translationFailure;block.translationRecovery=old.translationRecovery;}
     block.translationBoldRanges=translatedBoldRanges(block);
     const inlineMath=block.preserveSource&&/[∈∉=≈≠≤≥×÷±∑√∫⁰-⁹₀-₉\u02B0-\u02FF\u2070-\u209F\u1D2C-\u1D6A]/u.test(block.source);

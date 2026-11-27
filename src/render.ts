@@ -9,6 +9,7 @@ import { listInfo, listText } from './lists';
 import { latexBox, drawLatex } from './latex';
 import { inlineMathPlan } from './mathPresentation';
 import { visionRenderBlock,visionCrops } from './vision';
+import {formulaImagesCurrent,formulaImagesMatch} from './formulaImages';
 
 /** Design B: keep each complete source page on the left, with translation on the right. */
 export const LAYOUT = {
@@ -75,6 +76,21 @@ export interface RenderPlacement {
 }
 export interface RenderOptions { monoFontBytes?: Uint8Array; onPlacement?:(placement:RenderPlacement)=>void }
 
+/** A generated document must contain every intended region and every verified
+ * formula occurrence. Rendering without this check is not task completion. */
+export function auditRenderCoverage(project:Project,placements:RenderPlacement[]):void {
+  const ids=new Set(project.blocks.map(b=>b.id)),covered=new Set(placements.flatMap(p=>p.blockIDs||[p.blockID]));
+  if(placements.some(p=>!ids.has(p.blockID)||![p.x,p.y,p.width,p.height].every(Number.isFinite)||p.width<=0||p.height<=0||
+    p.y<LAYOUT.bottom-.01||p.y+p.height>LAYOUT.top+.01))throw new Error('PDF 排版存在无效、缺失或越界区域，未保存附件。');
+  const missing=project.blocks.filter(b=>!b.proseGroupAnchor&&(canTranslate(b)||b.kind==='math')&&!covered.has(b.id));
+  if(missing.length)throw new Error(`PDF 缺少区域 ${missing.map(b=>b.id).join('、')}，未保存附件。`);
+  for(const b of project.blocks.filter(b=>formulaImagesMatch(project,b))){
+    const indices=placements.filter(p=>p.blockID===b.id).flatMap(p=>p.inlineMathSources||[]);
+    if(indices.length!==b.mathSpans!.length||b.mathSpans!.some((_,i)=>indices.filter(v=>v===i).length!==1))
+      throw new Error(`${b.id} 的原公式位置或出现次数不完整，未保存附件。`);
+  }
+}
+
 function pageCrop(page: PDFPage) {
   const crop=page.getCropBox();
   return {left:crop.x,bottom:crop.y,right:crop.x+crop.width,top:crop.y+crop.height};
@@ -84,6 +100,8 @@ function pageCrop(page: PDFPage) {
 export async function render(project: Project, sourceBytes: Uint8Array, fontBytes: Uint8Array,
   appendix: boolean, signal: AbortSignal, progress: (s: string) => void,
   options: RenderOptions = {}): Promise<Uint8Array> {
+  const placements:RenderPlacement[]=[],placed=(p:RenderPlacement)=>{placements.push(p);options.onPlacement?.(p);};
+  if(project.blocks.some(b=>formulaImagesCurrent(b)&&!formulaImagesMatch(project,b)))throw new Error('公式与译文的核验记录来自其他论文，已停止生成。');
   const graphics=graphicGroups(project),byAnchor=new Map<string,GraphicGroup[]>();
   const graphicMembers=new Set(graphics.flatMap(group=>group.blockIDs));
   const incomplete = project.blocks.filter(b => canTranslate(b) && !automaticOriginalMatches(project,b) && !graphicMembers.has(b.id) && !b.translation.trim());
@@ -150,10 +168,15 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
           throw new Error(`${block.id} 的公式页码无效。`);
         const crop=source.getPage(pageIndex).getCropBox(),pad=3;
         const middle=(rect[1]+rect[3])/2;
-        const nearby=project.blocks.filter(candidate=>candidate.kind==='body').flatMap(candidate=>candidate.rects.map(r=>({rect:r,weight:Math.max(1,candidate.source.length/candidate.rects.length)})))
+        const surrounding=project.blocks.filter(candidate=>candidate.kind==='body'&&!candidate.originalGraphic&&!candidate.frontMatter&&!candidate.proseGroupAnchor).flatMap(candidate=>candidate.rects.map(r=>({rect:r,weight:Math.max(1,candidate.source.length/candidate.rects.length)})))
           .filter(candidate=>candidate.rect[0]===pageIndex&&candidate.rect[1]<=middle&&candidate.rect[3]>=middle)
           .map(candidate=>({...candidate,gap:Math.max(0,rect[2]-candidate.rect[4],candidate.rect[2]-rect[4])}))
-          .sort((a,b)=>a.gap-b.gap).slice(0,8);
+          .sort((a,b)=>a.gap-b.gap);
+        // Nearby short labels/formula fragments do not define the prose column.
+        // Prefer actual prose before limiting neighbors; otherwise adding one
+        // fragment can evict the real column and clip a right-aligned number.
+        const proseColumns=surrounding.filter(candidate=>candidate.weight>=80);
+        const nearby=(proseColumns.length?proseColumns:surrounding).slice(0,8);
         const widths=nearby.map(candidate=>({width:candidate.rect[3]-candidate.rect[1],weight:candidate.weight})).sort((a,b)=>a.width-b.width);
         const halfWeight=widths.reduce((n,w)=>n+w.weight,0)/2;let cumulative=0,typicalWidth=0;
         for(const item of widths){cumulative+=item.weight;if(cumulative>=halfWeight){typicalWidth=item.width;break;}}
@@ -189,7 +212,7 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
     const list=listInfo(block);
     const markerWidth=list?(list.ordered?Math.max(14,zhFont.widthOfTextAtSize(list.marker,size)+6):14):0;
     const textInset=(heading?0:21)+(list?Math.min(list.depth,8)*14:0)+markerWidth;
-    const {rewritten,uncertainInline,oversized,sourceReview,needsReview}=inlineMathPlan(block,translatedBoldRanges(block),{size,width:ZW-textInset});
+    const {rewritten,originals,uncertainInline,oversized,sourceReview,needsReview}=inlineMathPlan(block,translatedBoldRanges(block),{size,width:ZW-textInset});
     if(needsReview){
       // An old draft with no provable formula correspondence must not print flattened math.
       // Preserve its original paragraph and retain the editable Chinese in the project.
@@ -208,7 +231,7 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
       continue;
     }
     const content=listText(block,rewritten.text,rewritten.ranges);
-    const runs=withFontFallback(styledRuns(content.text,content.ranges),zhChars,monoChars);
+    const runs=withFontFallback(styledRuns(content.text,content.ranges,originals),zhChars,monoChars);
     const absent=[...new Set(runs.flatMap(run=>run.math||run.originalMath?[]:[...run.text].filter(c=>!(/\s/u.test(c))&&!(run.mono?monoChars:zhChars).has(c.codePointAt(0)!))))];
     if(absent.length)throw new Error(`${block.id} 含字体不支持的字符：${absent.slice(0,12).map(c=>`${c} (U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4,'0')})`).join(' ')}。请修订后重排。`);
     const lines=wrapStyled(runs,zhFont,monoFont,size,ZW-textInset).map(line=>{
@@ -293,7 +316,7 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
         page.drawPage(plan.image,{x:x-(plan.sourceBox.left-crop.x)*scale,y:y-(plan.sourceBox.bottom-crop.y)*scale,
           width:plan.image.width*scale,height:plan.image.height*scale});
         page.pushOperators(popGraphicsState());
-        options.onPlacement?.({kind:plan.kind,blockID:plan.block.id,blockIDs:plan.blockIDs,groupLabel:plan.groupLabel,
+        placed({kind:plan.kind,blockID:plan.block.id,blockIDs:plan.blockIDs,groupLabel:plan.groupLabel,
           sourcePage:sheet.sourcePage,pageIndex:sheetIndex,
           x:ZX+(ZW-plan.width)/2,y:cursor-plan.height,width:plan.width,height:plan.height,
           continued:sheet.continuation>0,sourceBox:plan.sourceBox,mathReview:!!plan.notice&&!plan.sourcePreserved,sourcePreserved:plan.sourcePreserved});
@@ -321,7 +344,14 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
           const font=run.mono?monoFont:zhFont;
           if(run.text) {
             const drawOptions={x:x+run.x,y:cursor-line.ascent!,font,size:plan.size,color:heading?ink:blue};
-            if(run.math){
+            if(run.originalMath?.crop){
+              const c=run.originalMath.crop,size=plan.size*(run.mathScale||1),scale=size/c.fontSize;
+              const x=drawOptions.x,y=drawOptions.y-run.originalMath.descent*size,w=run.originalMath.width*size,h=(c.top-c.bottom)*scale;
+              const image=await embeddedPage(c.pageIndex),crop=source.getPage(c.pageIndex).getCropBox();
+              page.pushOperators(pushGraphicsState(),rectangle(x,y,w,h),clip(),endPath());
+              page.drawPage(image,{x:x-(c.left-crop.x)*scale,y:y-(c.bottom-crop.y)*scale,width:image.width*scale,height:image.height*scale});
+              page.pushOperators(popGraphicsState());
+            }else if(run.math){
               drawLatex(page,run.math,drawOptions.x,drawOptions.y,plan.size*(run.mathScale||1),drawOptions.color);
               if(run.bold)drawLatex(page,run.math,drawOptions.x+.15,drawOptions.y,plan.size*(run.mathScale||1),drawOptions.color);
             }
@@ -330,7 +360,7 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
         }
         cursor-=line.height!;
       }
-      options.onPlacement?.({kind:'text',blockID:plan.block.id,sourcePage:sheet.sourcePage,pageIndex:sheetIndex,
+      placed({kind:'text',blockID:plan.block.id,sourcePage:sheet.sourcePage,pageIndex:sheetIndex,
         x:ZX+plan.textInset,y:cursor,width:ZW-plan.textInset,height:entryTop-cursor,continued,
         listMarker:startsBlock?plan.list?.marker:undefined,listDepth:plan.list?.depth,
         listMarkerX:startsBlock&&plan.list?ZX+plan.textInset-plan.markerWidth:undefined,
@@ -349,6 +379,7 @@ export async function render(project: Project, sourceBytes: Uint8Array, fontByte
     p.drawText('以下附上完整原 PDF，便于检索、复制和批注。',{x:LAYOUT.margin,y:LAYOUT.height-112,size:12,font:zhFont,color:grey});
     const copied=await doc.copyPages(source,source.getPageIndices());copied.forEach(page=>doc.addPage(page));
   }
+  auditRenderCoverage(project,placements);
   doc.setTitle(`${project.source.title} — English / Chinese 60-40`);
   doc.setCreator('PaperWeave '+project.pluginVersion);
   doc.setSubject('Original PDF pages preserved on the left; editable page-grouped translations on the right.');

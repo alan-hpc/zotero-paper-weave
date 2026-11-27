@@ -2,8 +2,9 @@ import { PDFFont } from 'pdf-lib';
 import { TextRange } from './model';
 import { latexBox } from './latex';
 import { SCRIPT_EXPRESSION, LATEX_EXPRESSION, scriptLatex, latexBody } from './inlineMath';
-export interface OriginalMathMetrics {key:string;width:number;ascent:number;descent:number;index:number;wrapped?:boolean}
-export interface Run { text: string; mono: boolean; bold?: boolean; math?:string; mathScale?:number; originalMath?:OriginalMathMetrics }
+export interface OriginalMathMetrics {key:string;width:number;ascent:number;descent:number;index:number;wrapped?:boolean;
+  latex?:string;crop?:{pageIndex:number;left:number;bottom:number;right:number;top:number;fontSize:number;baseline:number}}
+export interface Run { text: string; mono: boolean; bold?: boolean; math?:string; mathScale?:number; originalMath?:OriginalMathMetrics;keepWithPrevious?:boolean }
 export interface StyledLine { runs: Run[]; paragraphEnd: boolean; height?:number; ascent?:number }
 export interface PositionedRun extends Run { x: number; width: number }
 export const runWidth=(run:Run,serif:PDFFont,mono:PDFFont,size:number)=>run.originalMath?run.originalMath.width*size*(run.mathScale||1):run.math?
@@ -44,7 +45,7 @@ export function styledRuns(text: string, boldRanges:TextRange[]=[],originals=new
     if(offset>cursor)appendPlain(cursor,offset);
     if(value.startsWith('\uE000')){
       const originalMath=originals.get(value);if(!originalMath)throw new Error('原文公式对象缺失，请重新打开工作台。');
-      output.push({text:value,mono:false,originalMath});
+      output.push({text:value,mono:false,originalMath,...(originalMath.latex?{math:originalMath.latex}:{})});
     }else if(value.startsWith('`'))output.push({text:value.slice(1,-1),mono:true,bold:false});
     else {
       const explicit=/^(?:\\[([]|\$)/u.test(value);
@@ -56,8 +57,16 @@ export function styledRuns(text: string, boldRanges:TextRange[]=[],originals=new
     cursor=offset+value.length;
   }
   if(cursor<text.length)appendPlain(cursor,text.length);
+  const grouped:Run[]=[];
+  for(const run of output){
+    const argument=grouped.at(-1)?.originalMath&&!run.math&&!run.originalMath&&run.text.match(/^\([A-Za-z0-9_.,+\-−=·⋅/ ]{1,30}\)/u);
+    if(argument&&!/[A-Za-z]{3,}/u.test(argument[0])){
+      grouped.push({text:argument[0],mono:false,bold:run.bold,math:argument[0].replace(/[·⋅]/gu,'\\cdot '),keepWithPrevious:true});
+      if(run.text.length>argument[0].length)grouped.push({...run,text:run.text.slice(argument[0].length)});
+    }else grouped.push(run);
+  }
   const merged:Run[]=[];
-  for(const run of output) {
+  for(const run of grouped) {
     const last=merged.at(-1);
     if(last?.bold&&!run.bold&&/[.:]$/u.test(last.text)&&/^[A-Za-z]/u.test(run.text))run.text=' '+run.text;
     if(last&&!last.math&&!last.originalMath&&!run.math&&!run.originalMath&&last.mono===run.mono&&!!last.bold===!!run.bold)last.text+=run.text;
@@ -69,9 +78,11 @@ export function wrapStyled(runs:Run[],serif:PDFFont,mono:PDFFont,size:number,wid
   const lines:StyledLine[]=[];let line:Run[]=[];let used=0;
   const push=(paragraphEnd=false)=>{while(line.length&&/\s$/.test(line.at(-1)!.text)){line.at(-1)!.text=line.at(-1)!.text.trimEnd();if(!line.at(-1)!.text)line.pop();else break;}lines.push({runs:line,paragraphEnd});line=[];used=0;};
   const add=(text:string,isMono:boolean,isBold=false)=>{const last=line.at(-1);if(last&&!last.math&&!last.originalMath&&last.mono===isMono&&!!last.bold===isBold)last.text+=text;else line.push({text,mono:isMono,bold:isBold});};
-  for(const run of runs) {
+  for(const [index,run]of runs.entries()) {
     if(run.math||run.originalMath){
       const length=runWidth(run,serif,mono,size),scale=Math.min(1,width/length);
+      const next=runs[index+1],pair=next?.keepWithPrevious?length+runWidth(next,serif,mono,size):0;
+      if(pair&&pair<=width&&used+pair>width&&used)push();
       if(scale<.5)throw new Error('行内公式过宽，请拆分公式或使用独立公式。');
       if(used+length*scale>width&&used)push();
       line.push({...run,mathScale:scale});used+=length*scale;continue;

@@ -7,6 +7,8 @@ import { planProviders } from './routing';
 import { applyGraphicRegions } from './graphics';
 import { recognizeVision,activateVision,visionMatches,visionNeedsReview,visionTranslationKey,editVisionText,VisionImage,VisionMode } from './vision';
 import {completeAutomaticReview} from './automaticReview';
+import {recoverFormulaImages} from './formulaRecovery';
+import {formulaImagesMatch} from './formulaImages';
 import {copyBytes} from './bytes';
 import {applyProseGroups} from './proseGroups';
 
@@ -192,8 +194,9 @@ function list() {
     const button = document.createElement('button');
     button.classList.toggle('current', b.id === selected?.id);
     const meta = document.createElement('span'); meta.className = 'block-meta';
-    const state=automaticOriginalMatches(project,b)?'自动复查完成，保留原文':b.translationFailure?'保护校验待恢复':needsReview(b)?'格式待自动检查':b.edited?'已修订':b.translation?'已翻译':'待翻译';
+    const state=formulaImagesMatch(project,b)?'中文已核验，原公式嵌入':automaticOriginalMatches(project,b)?'自动复查完成，保留原文':b.translationFailure?'保护校验待恢复':needsReview(b)?'格式待自动检查':b.edited?'已修订':b.translation?'已翻译':'待翻译';
     meta.textContent = `${b.id} · p.${b.rects[0]?.[0]+1} · ${b.proseGroupAnchor?'已合并到 '+b.proseGroupAnchor:b.proseGroup?'组合正文':b.originalGraphic?(b.originalGraphic.family==='algorithm'?'算法区域（整组保留）':'图表区域（整组保留）'):b.frontMatter&&b.kind==='keep'?'作者信息（仅左侧）':labels[b.kind]} · ${canTranslate(b) ? state : b.proseGroupAnchor?'旧译文保留':'原文'}${b.vision?.active?' · 图片识别已采用':''}${b.translationRecovery?' · 恢复进度 '+b.translationRecovery.completed.length+'/'+b.translationRecovery.total:''}`;
+    if(b.formulaProgress)meta.textContent+=` · 公式核验 ${b.formulaProgress.approved.length}/${b.mathSpans?.length||0}`;
     const excerpt = document.createElement('span'); excerpt.textContent = b.source.slice(0,90) || '[PDF 图形区域]';
     button.append(meta, excerpt); button.addEventListener('click', () => select(b)); root.appendChild(button);
   }
@@ -371,7 +374,8 @@ bind('translate', () => run(async signal => {
 }));
 async function repairReview(signal:AbortSignal,onlyIDs?:Set<string>){
   if(input('vision-before-review').checked){
-    const candidates=project!.blocks.filter(b=>canTranslate(b)&&(!onlyIDs||onlyIDs.has(b.id))&&visionNeedsReview(b)&&!b.edited&&!automaticOriginalMatches(project!,b));
+    const candidates=project!.blocks.filter(b=>canTranslate(b)&&(!onlyIDs||onlyIDs.has(b.id))&&visionNeedsReview(b)&&!b.edited&&
+      (!automaticOriginalMatches(project!,b)||b.automaticOriginal!.recoveryVersion!==2));
     if(!candidates.length)return;
     const vision=await visionClient(signal);
     let translation:Awaited<ReturnType<typeof provider>>|undefined;
@@ -379,6 +383,12 @@ async function repairReview(signal:AbortSignal,onlyIDs?:Set<string>){
       phase('自动检查与恢复',index,candidates.length,'段');
       await completeAutomaticReview(project!,b,{
         model:vision.settings.model,
+        recoverFormulas:async mode=>{
+          try{return await recoverFormulaImages(vision.client,vision.settings,project!,b,
+            mode=>host.visionImages(host.item,project,b.id,signal,(s:string)=>status(`${b.id} · ${s}`),mode),signal,
+            async()=>{revision++;dirty=true;await save();},status,mode==='reuse');}
+          catch(error:any){if(error?.status===400&&error?.code==='unsupported_task')throw new Error('当前图片代理尚不支持中文与原公式核验，请更新并重启 alpha.50 配套代理后继续，已有进度已保留。');throw error;}
+        },
         recognize:mode=>recognizeBlock(b,vision,signal,mode),
         save:async()=>{revision++;dirty=true;await save();},
         translate:async()=>{
@@ -389,7 +399,7 @@ async function repairReview(signal:AbortSignal,onlyIDs?:Set<string>){
         }
       },signal);
     }
-    list();status('自动检查与恢复已完成；无法确认的区域已保留原文，无需人工确认。');return;
+    list();status('自动检查与恢复已完成；可复用的中文已保留，复杂公式可按原貌嵌入，无需人工确认。');return;
   }
   if(!project!.blocks.some(b=>canTranslate(b)&&(!onlyIDs||onlyIDs.has(b.id))&&needsReview(b)&&!b.edited))return;
   const {client,settings}=await provider(signal);
@@ -478,6 +488,11 @@ async function generatePDF(signal: AbortSignal) {
     if(p.mathReview){mathReview.add(p.blockID);const block=project!.blocks.find(b=>b.id===p.blockID);if(block)block.translationNeedsRefresh=true;}
   }});
   signal.throwIfAborted();
+  const layoutRepair=[...mathReview].filter(id=>{const b=project!.blocks.find(b=>b.id===id)!;return !b.edited&&!automaticOriginalMatches(project!,b);});
+  if(input('vision-before-review').checked&&layoutRepair.length){
+    revision++;dirty=true;await save();
+    throw Object.assign(new Error('排版检查发现可自动恢复的公式区域，正在继续修复。'),{code:'PW_RENDER_REPAIR',blockIDs:layoutRepair});
+  }
   phase('保存 Zotero 附件');status('PDF 排版完成，正在保存并打开附件…');
   const result = await host.attachPDF(host.item,project,output,input('make-preferred').checked);
   status(result.preferenceError ? `双语 PDF 已生成。优先打开未生效：${result.preferenceError}` :
@@ -485,11 +500,15 @@ async function generatePDF(signal: AbortSignal) {
   if(mathReview.size)status(`PDF 已生成；${mathReview.size} 段公式对应需复核，本次保留原文。可在「公式 / 格式需复核」中修订。`);
   const preserved=project!.blocks.filter(b=>!b.originalGraphic&&!b.proseGroupAnchor&&automaticOriginalMatches(project!,b));
   if(preserved.length)status(`PDF 已生成；自动复查后 ${preserved.length} 段保留原文图像，其余正文已翻译。无需逐段确认，已有中文和诊断已保存。${result.preferenceError?'优先打开未生效：'+result.preferenceError:''}`);
+  const hybrid=project!.blocks.filter(b=>formulaImagesMatch(project!,b));
+  if(hybrid.length&&!preserved.length)status(`PDF 已生成；${hybrid.length} 段中文及公式位置已自动核验，${hybrid.reduce((n,b)=>n+b.formulaImages!.crops.length,0)} 处公式按原貌嵌入，中文正文完整保留。${result.preferenceError?'优先打开未生效：'+result.preferenceError:''}`);
 }
 bind('prefer-original', () => run(async () => { await host.preferOriginal(host.item); status('这篇论文已改为优先打开原文。'); }));
 bind('start', () => run(async signal => {
   applyGraphicRegions(project!);applyProseGroups(project!);
   revision++;dirty=true;await save();
+  const formulaResume=project!.blocks.filter(b=>canTranslate(b)&&!b.edited&&b.formulaProgress).map(b=>b.id);
+  if(input('vision-before-review').checked&&formulaResume.length)await repairReview(signal,new Set(formulaResume));
   if(project!.blocks.some(block=>canTranslate(block)&&!automaticOriginalMatches(project!,block)&&!block.translation.trim())) {
     const { client, settings } = await provider(signal);
     try{await translateRemaining(client, settings, signal);}catch(error:any){
@@ -503,7 +522,12 @@ bind('start', () => run(async signal => {
     const unresolved=project!.blocks.filter(b=>canTranslate(b)&&needsReview(b)&&!b.edited&&!automaticOriginalMatches(project!,b));
     if(unresolved.length)throw new Error(`自动恢复未完成：${reviewDetails(unresolved)}。已有进度已保存。`);
   }
-  await generatePDF(signal);
+  for(let attempt=0;attempt<2;attempt++){
+    try{await generatePDF(signal);return;}
+    catch(error:any){if(error?.code!=='PW_RENDER_REPAIR')throw error;
+      await repairReview(signal,new Set(error.blockIDs));}
+  }
+  throw new Error('PDF 排版自动恢复仍未完成，已有译文和进度已保留。');
 }));
 bind('export', () => run(async () => { await host.exportProject(window, project); status('导出操作完成。项目包含论文文本，请按需要保管。'); }));
 bind('import', () => run(async () => { const p = await host.importProject(window,host.item,project); if (p) { project = p; status('已导入修订；可以重新生成 PDF。'); } }));
@@ -512,7 +536,7 @@ $('translation').addEventListener('input', () => { if (selected) {
   const updated=area('translation').value;
   selected.translationBoldRanges=remapTextRanges(selected.translation,updated,selected.translationBoldRanges);
   selected.translationMathRefs=remapTextRanges(selected.translation,updated,selected.translationMathRefs);
-  selected.translation=updated;selected.edited=true;selected.translationNeedsRefresh=false;delete selected.automaticOriginal;delete selected.sourceRepairReason;delete selected.translationFailure;delete selected.translationRecovery;changed();
+  selected.translation=updated;selected.edited=true;selected.translationNeedsRefresh=false;delete selected.formulaProgress;delete selected.formulaImages;delete selected.automaticOriginal;delete selected.sourceRepairReason;delete selected.translationFailure;delete selected.translationRecovery;changed();
   selected.translationVisionKey=visionTranslationKey(selected);
 } });
 $('vision-text').addEventListener('input',()=>{if(selected?.vision){
@@ -520,7 +544,7 @@ $('vision-text').addEventListener('input',()=>{if(selected?.vision){
   if(text===selected.vision.sourceText)visionDrafts.delete(selected.id);else visionDrafts.set(selected.id,text);
   $('vision-status').textContent=visionDrafts.has(selected.id)?'识别修订尚未保存；验证失败时会保留此草稿，便于继续修改。':'识别原文没有未保存的修改。';
 }});
-$('kind').addEventListener('change', () => { if (selected) { selected.kind = ($<HTMLSelectElement>('kind')).value as Kind; selected.kindEdited=true;delete selected.automaticOriginal;applyGraphicRegions(project!);applyProseGroups(project!); changed(); list(); updateControls(); } });
+$('kind').addEventListener('change', () => { if (selected) { selected.kind = ($<HTMLSelectElement>('kind')).value as Kind; selected.kindEdited=true;delete selected.formulaProgress;delete selected.formulaImages;delete selected.automaticOriginal;applyGraphicRegions(project!);applyProseGroups(project!); changed(); list(); updateControls(); } });
 for(const ids of Object.values(profileIDs)){
   input(ids.base).addEventListener('change',configurationView);
   input(ids.model).addEventListener('change',configurationView);

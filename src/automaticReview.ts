@@ -4,6 +4,7 @@ import {TranslationProtectionError} from './provider';
 
 interface RecoveryOperations {
   model?:string;
+  recoverFormulas?:(mode:'reuse'|'complete')=>Promise<boolean>;
   recognize:(mode:VisionMode)=>Promise<VisionRecord>;
   translate:()=>Promise<void>;
   save:()=>Promise<void>;
@@ -14,7 +15,10 @@ interface RecoveryOperations {
 export async function completeAutomaticReview(project:Project,b:Block,ops:RecoveryOperations,signal:AbortSignal):Promise<'translated'|'original'|'manual'> {
   signal.throwIfAborted();
   if(b.edited)return 'manual';
-  if(automaticOriginalMatches(project,b))return 'original';
+  const preserved=automaticOriginalMatches(project,b);
+  if(preserved&&(!ops.recoverFormulas||b.automaticOriginal!.recoveryVersion===2))return 'original';
+  if(ops.recoverFormulas&&await ops.recoverFormulas(preserved?'complete':'reuse'))return 'translated';
+  if(preserved){b.automaticOriginal!.recoveryVersion=2;await ops.save();return 'original';}
   const evidence=new Set<string>(),reasons:string[]=[];
   for(const mode of ['paragraph','context'] as const){
     signal.throwIfAborted();
@@ -37,9 +41,10 @@ export async function completeAutomaticReview(project:Project,b:Block,ops:Recove
       reasons.push(error.message);
     }
   }
+  if(ops.recoverFormulas&&await ops.recoverFormulas('complete'))return 'translated';
   signal.throwIfAborted();
   if(!evidence.size)throw new Error('自动恢复缺少与原文绑定的图片证据，已保留进度。');
-  b.automaticOriginal={version:1,libraryID:project.source.libraryID,sourceKey:project.source.key,sourceHash:project.source.hash,inputKey:blockInputKey(b),
+  b.automaticOriginal={version:1,recoveryVersion:2,libraryID:project.source.libraryID,sourceKey:project.source.key,sourceHash:project.source.hash,inputKey:blockInputKey(b),
     reason:[...new Set(reasons)].join('；').slice(0,1500)||'两轮自动识别仍无法确认内容。',at:now(),model:ops.model||b.vision?.model||'',evidence:[...evidence].slice(0,12)};
   // Old Chinese and diagnostics remain editable. Do not call an uncertain
   // transcription approved, clear failures, or relabel the canonical source.

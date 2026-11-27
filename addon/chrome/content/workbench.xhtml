@@ -46,7 +46,7 @@
     <button id="cancel" disabled="disabled">取消</button>
   </nav>
   <label class="inline"><input id="vision-before-review" type="checkbox" />生成 PDF 前，自动检查并修复疑难段落（无需人工确认）</label>
-  <p class="hint">使用当前支持图片的模型自动识别、复查和重译，只上传目标区域及公式细节，使用对应服务的额度。仍无法确认时在对应位置保留原文图像，继续生成 PDF；已有译文和人工修订保留。</p>
+  <p class="hint">使用当前支持图片的模型自动识别、复查和重译，只上传目标区域及公式细节，使用对应服务的额度。先核验并复用已有中文；复杂公式可单独按原貌嵌入，中文继续排版。最终无法确认的内容明确保留原图；已有译文和人工修订保留。</p>
   <section id="task-progress" data-busy="false" aria-label="任务进度">
     <div id="status" role="status" aria-live="polite">准备中…</div>
     <p id="provider-status" class="hint" role="status" aria-live="polite"></p>

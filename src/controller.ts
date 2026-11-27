@@ -265,6 +265,8 @@ export async function importProject(window: any, item: any, current: Project) {
     block.translationMathRefs=rebaseMathRefs(edit,block);
     block.edited = true; block.translatedWith = edit.translatedWith;
     delete block.automaticOriginal;
+    delete block.formulaImages;
+    delete block.formulaProgress;
     if(edit.vision&&visionMatches(current,{...block,vision:edit.vision}))block.vision=edit.vision;
     block.translationVisionKey=edit.translationVisionKey&&edit.translationVisionKey===block.vision?.cacheKey?edit.translationVisionKey:undefined;
     if(edit.translationVisionKey&&!block.translationVisionKey){block.translationNeedsRefresh=true;block.sourceRepairReason='导入译文来自另一版图片识别，请对照原文复核。';}
@@ -307,7 +309,7 @@ function createWorkbenchBridge(item:any,sessionID:string){
     },
     saveProject:async(project:Project)=>{await checkProject(project);await saveProject(project);},
     sourceBytes:async(requested:any,project:Project)=>{checkItem(requested);await checkProject(project);return sourceBytes(item,project);},
-    visionImages:async(requested:any,project:Project,blockID:string,signal:AbortSignal,progress:(s:string)=>void,mode:'paragraph'|'context'='paragraph')=>{
+    visionImages:async(requested:any,project:Project,blockID:string,signal:AbortSignal,progress:(s:string)=>void,mode:'paragraph'|'context'|'formula-tight'|'formula-wide'|'formula-isolated'='paragraph')=>{
       checkItem(requested);await checkProject(project);signal.throwIfAborted();
       const block=project.blocks.find(b=>b.id===blockID);
       if(!block)throw new Error('目标段落已不存在。');
