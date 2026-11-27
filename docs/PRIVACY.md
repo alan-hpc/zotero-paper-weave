@@ -7,7 +7,9 @@ PaperWeave has no telemetry and operates without a plugin-author server.
 Zotero extracts structure locally. Original PDF bytes and bundled fonts are used locally to
 build a new PDF. The local project stores source text, translations, glossary, source identity,
 and layout metadata in the Zotero data directory. Exported JSON contains that same paper data.
-The project folder is not automatically synced by PaperWeave.
+The project folder is not automatically synced by PaperWeave. Original-page previews render locally
+and keep at most three page images in workbench memory; selecting a paragraph does not upload
+a page, call a model, or write the vision screenshot cache.
 
 ## Model requests
 
@@ -30,13 +32,15 @@ remains on the original PDF page. Users can explicitly classify a region as body
 The selected provider controls retention, billing and use of those requests. PaperWeave cannot
 change provider policies. Users must select an appropriate endpoint for their documents.
 
-When the user enables Codex quota fallback, a failed terminology batch or paragraph is sent to
-the separately configured DeepSeek endpoint after an explicit Codex quota error. Subsequent model
-requests in that task also use DeepSeek and are billed by that API account. Cached translations
-are retained. Temporary rate limits, local queueing, network and authentication failures do not
-initiate fallback. Disabling the checkbox prevents automatic cross-provider requests.
+When the user enables quota fallback, a failed terminology batch or paragraph is sent to the next
+enabled, configured model after an explicit quota or balance error. Subsequent text requests in that
+task use the selected fallback. Each model slot accepts arbitrary compatible services; the selected
+account controls billing. Temporary rate limits, local queueing, network and authentication failures
+do not initiate fallback. Disabling the checkbox prevents automatic cross-provider requests.
 
-API credentials are stored in Zotero Login Manager, scoped to the exact endpoint. They are read
+API credentials are stored in Zotero Login Manager, scoped to model slot plus exact endpoint.
+Older endpoint-only keys remain usable until the slot is explicitly saved or deleted; a deletion
+override contains only the endpoint/slot identifier and prevents legacy-key resurrection. They are read
 only for API requests, sent as an Authorization header, and are never placed in project exports,
 PDFs, normal error messages or logs by PaperWeave. Login Manager protection depends on the user's
 Zotero/OS setup; this project does not promise an additional encryption layer.

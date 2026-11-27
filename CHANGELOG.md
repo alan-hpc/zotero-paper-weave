@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-alpha.53
+
+- Adopt the reading workbench: paragraph list, full original-page preview with click-follow/highlights, and editable Chinese; keep generation/retranslation/progress in the bottom dock. Source previews render locally, share same-page work and retain at most three source/hash/geometry-bound images. Cancellation and generation tokens prevent stale page updates.
+- Use generic Model 1 / 2 / 3 slots for arbitrary compatible models, preserving historical profiles, order and credentials. Fold model/preferences settings when any enabled configuration is usable; open them when configuration is missing. Add single-model editing and keyboard-safe settings drawer.
+- Scope new credentials to slot plus exact endpoint. Read legacy endpoint credentials until overridden; deleting one slot cannot remove another or resurrect its legacy key. Apply vendor-specific wire options only to the actual vendor endpoint and model.
+- Preserve existing translation/manual-revision, recovery, 60/40 export and single-output lifecycle. Add preview geometry/race/cache/session checks, drawer/folding/selection tests, same-endpoint credential isolation and provider-independent wire regressions.
+
 ## 0.1.0-alpha.52
 
 - Add a primary “Retranslate and generate PDF” action beside cached generation. Request the current ordered provider for automatic body/headings despite populated caches; retain manual revisions, glossary, original graphics and references.

@@ -214,7 +214,7 @@ export class Provider {
       if(!quota||!this.fallbackProfile||options.images?.length)throw error;
       const next=this.fallbackProfile,url=new URL(endpoint(next.settings.baseURL));
       if(!next.key.trim()&&!['localhost','127.0.0.1','[::1]'].includes(url.hostname))
-        throw new Error(next.name==='deepseek'?'尚未保存 DeepSeek API Key；已完成段落和术语进度保留。':'下一优先级服务尚未保存 API Key；已完成进度保留。');
+        throw new Error('下一优先级模型尚未保存 API Key；已完成段落和术语进度保留。');
       // One shared decision per task, including parallel paragraph workers and terminology batches.
       this.usingFallback=true;
       this.options.onFallback?.(this.options.name,next.name);
@@ -226,7 +226,7 @@ export class Provider {
     if(options.images&&(!options.images.length||options.images.length>6||options.images.some(s=>typeof s!=='string'||!/^data:image\/png;base64,[A-Za-z0-9+/]+=*$/u.test(s))||options.images.reduce((n,s)=>n+s.length,0)>24*1024*1024))
       throw new Error('图片请求格式或大小无效。');
     const url = endpoint(this.settings.baseURL);
-    const deepseek=/^deepseek-/iu.test(this.settings.model);
+    const deepseek=new URL(url).hostname==='api.deepseek.com'&&/^deepseek-/iu.test(this.settings.model);
     const timeoutMS=options.timeoutMS ?? 120000, maxAttempts=options.maxAttempts ?? 3;
     const requestId=options.requestId ?? 'request';
     for (let attempt = 0; attempt < maxAttempts; attempt++) {

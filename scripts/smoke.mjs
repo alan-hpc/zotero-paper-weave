@@ -52,6 +52,10 @@ try {
   await verifyRetranslation(moduleFor);
   const {verifyOutputLifecycle}=await import('./output-lifecycle-regression.mjs');
   await verifyOutputLifecycle(moduleFor);
+  const {verifySourcePreview}=await import('./source-preview-regression.mjs');
+  await verifySourcePreview(moduleFor);
+  const {verifyWorkbenchLayout}=await import('./workbench-layout-regression.mjs');
+  await verifyWorkbenchLayout();
   const {verifyPaperSessions}=await import('./paper-session-regression.mjs');
   await verifyPaperSessions(moduleFor);
   const {PreferredAttachments}=await moduleFor('src/preferred.ts');
@@ -527,7 +531,8 @@ try {
   assert.ok(markup.indexOf('<script src="workbench.js"')>markup.indexOf('</footer>'));
   assert.ok(markup.indexOf('id="task-progress"')<markup.indexOf('id="project-summary"'),'progress stays near primary actions');
   const uiBundle=await build({entryPoints:['src/workbench.ts'],bundle:true,write:false,format:'iife',target:'firefox128'});
-  const uiElement=()=>({value:'',textContent:'',checked:false,disabled:false,open:false,attributes:new Map(),listeners:new Map(),children:[],
+  const uiElement=()=>({value:'',textContent:'',checked:false,disabled:false,open:false,attributes:new Map(),listeners:new Map(),children:[],style:{},scrollTop:0,scrollLeft:0,clientTop:0,clientLeft:0,clientHeight:400,clientWidth:300,complete:true,naturalWidth:612,
+    getAttribute(key){return this.attributes.get(key);},getBoundingClientRect(){return {top:0,left:0};},scrollTo(position){this.scrolled=position;},focus(){},
     setAttribute(key,value){this.attributes.set(key,value);},removeAttribute(key){this.attributes.delete(key);},
     classList:{toggle(){},add(){}},addEventListener(name,listener){this.listeners.set(name,listener);},replaceChildren(){this.children=[];},append(...nodes){this.children.push(...nodes);},appendChild(node){this.children.push(node);return node;},
     insertBefore(node,before){this.children=this.children.filter(child=>child!==node);const index=this.children.indexOf(before);this.children.splice(index<0?this.children.length:index,0,node);return node;}});
@@ -565,8 +570,9 @@ try {
   profileRoot.insertBefore=function(...args){profileMoves++;return moveProfile.apply(this,args);};
   elements.get('deepseek-key').value='synthetic-input-key';elements.get('deepseek-key').listeners.get('input')();
   assert.equal(profileMoves,0,'editing a key does not move its focused profile in the DOM');
-  assert.match(elements.get('fallback-status').textContent,/调用顺序：DeepSeek/);
+  assert.match(elements.get('fallback-status').textContent,/调用顺序：模型 2/);
   elements.get('deepseek-key').value='';
+  elements.get('codex-edit').listeners.get('click')();await new Promise(resolve=>setTimeout(resolve,0));
   elements.get('use-codex-proxy').listeners.get('click')();await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(elements.get('codex-base').value,'http://127.0.0.1:47771/v1');assert.equal(elements.get('codex-model').value,'codex-local');
   assert.equal(elements.get('codex-key').value,'');assert.match(elements.get('status').textContent,/保存设置/);

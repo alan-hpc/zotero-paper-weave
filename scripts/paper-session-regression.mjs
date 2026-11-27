@@ -105,6 +105,14 @@ export async function verifyPaperSessions(moduleFor){
     Zotero.getMainWindow=()=>null;Zotero.Promise={delay:async()=>{}};
     Zotero.Reader.open=async(id,_location,options)=>{assert.equal(options.openInWindow,true);assert.equal(options.openInBackground,true);screenshotItems.push(id);return{_iframeWindow:{wrappedJSObject:{PDFViewerApplication:{pdfDocument:pdf,pdfViewer:{container:{ownerDocument:{defaultView:target}}}}}}};};
     Cu.waiveXrays=value=>value;Cu.cloneInto=boundary.cloneInto;
+    await assert.rejects(replayBridge.sourcePreview(linear,projectFor(replay),0,new AbortController().signal),/绑定的 PDF/);
+    await assert.rejects(replayBridge.sourcePreview(replay,projectFor(linear),0,new AbortController().signal),/不匹配|绑定的 PDF/);
+    await assert.rejects(replayBridge.sourcePreview(replay,projectFor(replay),99,new AbortController().signal),/无效/);
+    assert.equal(screenshotItems.length,0,'invalid identities and pages are rejected before accessing a reader');
+    const pagePreview=await replayBridge.sourcePreview(replay,projectFor(replay),0,new AbortController().signal);
+    assert.match(pagePreview,/^data:image\/png;base64,/);assert.deepEqual(screenshotItems,[replay.id],'late preview callbacks remain bound to their original paper');
+    assert.equal(imagePaths.length,0,'full-page preview remains in memory and never writes the vision cache');
+    screenshotItems.length=0;
     const screenshots=await replayBridge.visionImages(replay,projectFor(replay),'p0-0',new AbortController().signal,()=>{});
     assert.equal(screenshots.length,1);assert.deepEqual(screenshotItems,[replay.id]);
     assert.ok(imagePaths.every(path=>path.includes('1-REPLAY01-identical-bytes')));

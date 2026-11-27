@@ -4,7 +4,7 @@ import { resolveSettings } from './settings';
 
 export interface ReadyProvider { name:ProviderName; settings:Settings; key:string }
 /** Resolve once per task. Disabled/incomplete profiles never receive requests. */
-export function planProviders(value:Settings,keyFor:(base:string)=>string) {
+export function planProviders(value:Settings,keyFor:(base:string,name:ProviderName)=>string) {
   const settings=resolveSettings(value),routing=settings.routing;
   const ready:ReadyProvider[]=[],skipped:{name:ProviderName;reason:string}[]=[];
   for(const name of routing.order){
@@ -14,7 +14,7 @@ export function planProviders(value:Settings,keyFor:(base:string)=>string) {
     let url:URL;
     try{url=new URL(endpoint(profile.baseURL));}
     catch{skipped.push({name,reason:'地址无效'});continue;}
-    const key=keyFor(profile.baseURL).trim();
+    const key=keyFor(profile.baseURL,name).trim();
     if(!key&&!['localhost','127.0.0.1','[::1]'].includes(url.hostname)){
       skipped.push({name,reason:'未保存 API Key'});continue;
     }

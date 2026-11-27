@@ -14,6 +14,7 @@ import {applyProseGroups} from './proseGroups';
 import {inlineMathPlan} from './mathPresentation';
 import {visionRenderBlock} from './vision';
 import {beginRetranslation,completeRetranslationBlock} from './retranslation';
+import {SourcePreview,PreviewView} from './sourcePreview';
 
 async function initialize() {
 const host = (window as any).arguments[0];
@@ -38,13 +39,77 @@ let phaseKey='',phaseLabel='',phaseStarted=0;
 const TRANSLATION_CONCURRENCY = 3;
 let providerOrder:ProviderName[]=[...PROVIDERS];
 let taskProvider:ProviderName|undefined;
+let editingModel:ProviderName='codex',settingsShown=false;
+let sourcePage=0,previewView:PreviewView|undefined;
+const sourcePreview=new SourcePreview(async(project,pageIndex,signal)=>{
+  if(typeof host.sourcePreview!=='function')throw new Error('请安装完整新版以启用原文整页预览；下方仍可查看提取文本。');
+  return host.sourcePreview(host.item,project,pageIndex,signal);
+},showSourcePreview);
 const priorityActions=PROVIDERS.flatMap(name=>[`${name}-up`,`${name}-down`]);
-const settingActions=[...priorityActions,'save-settings','use-codex-proxy','delete-key','delete-codex-key','delete-deepseek-key'];
+const settingActions=[...priorityActions,...PROVIDERS.map(name=>`${name}-edit`),'save-settings','use-codex-proxy','delete-key','delete-codex-key','delete-deepseek-key'];
 const actions = ['start','restart','terms-action','translate','repair-review','vision-recognize','vision-preview','vision-save','vision-apply','vision-restore','retranslate','import','export','save-edit','save-terms',...settingActions,'prefer-original'];
 const profileIDs={codex:{base:'codex-base',model:'codex-model',key:'codex-key',status:'codex-key-status'},
   deepseek:{base:'deepseek-base',model:'deepseek-model',key:'deepseek-key',status:'deepseek-key-status'},
   custom:{base:'base',model:'model',key:'key',status:'key-status'}};
 const status = (s: string, error = false) => { $('status').textContent = s; $('status').classList.toggle('error', error); };
+function configured():boolean {
+  return planProviders(host.settings(),(base,name)=>host.hasKey(base,name)?'saved-key-present':'').ready.length>0;
+}
+function showSourcePreview(view:PreviewView){
+  previewView=view;sourcePage=view.pageIndex;
+  $('source-page-label').textContent=`原文第 ${view.pageIndex+1} / ${project?.pages.length||1} 页`;
+  $<HTMLButtonElement>('source-prev').disabled=!project||view.pageIndex<=0;
+  $<HTMLButtonElement>('source-next').disabled=!project||view.pageIndex>=project.pages.length-1;
+  const image=$<HTMLImageElement>('source-image'),highlights=$('source-highlights');
+  highlights.replaceChildren();
+  $('source-preview-status').textContent=view.loading?'正在本地载入原文…':view.error||'';
+  image.hidden=!view.dataURL;
+  if(view.error)($('source-text') as HTMLDetailsElement).open=true;
+  if(!view.dataURL)return;
+  for(const region of view.regions){
+    const mark=document.createElement('div');mark.className='source-highlight';mark.setAttribute('aria-label','当前段落的原文位置');
+    mark.style.cssText=`left:${region.left}%;top:${region.top}%;width:${region.width}%;height:${region.height}%`;
+    highlights.append(mark);
+  }
+  const align=()=>{
+    if(previewView!==view)return;
+    const pane=$('source-viewport'),sheet=$('source-sheet'),region=view.regions[0];
+    const sheetBox=sheet.getBoundingClientRect(),paneBox=pane.getBoundingClientRect();
+    const top=sheetBox.top-paneBox.top+pane.scrollTop-pane.clientTop+(region?(region.top+region.height/2)/100*image.clientHeight:0)-pane.clientHeight*.4;
+    const left=sheetBox.left-paneBox.left+pane.scrollLeft-pane.clientLeft+(region?(region.left+region.width/2)/100*image.clientWidth:0)-pane.clientWidth/2;
+    pane.scrollTo({top:Math.max(0,top),left:Math.max(0,left),behavior:'instant'});
+  };
+  image.onload=align;
+  if(image.getAttribute('src')!==view.dataURL)image.setAttribute('src',view.dataURL);
+  if(image.complete&&image.naturalWidth)align();
+}
+for(const [id,delta]of [['source-prev',-1],['source-next',1]] as const)bind(id,()=>{
+  if(!project||!selected)return;const page=sourcePage+delta;
+  if(page>=0&&page<project.pages.length)void sourcePreview.show(project,selected,page);
+});
+$('source-zoom').addEventListener('change',()=>{
+  const zoom=Number(input('source-zoom').value)||1;
+  $('source-sheet').style.width=`${Math.min(2,Math.max(1,zoom))*100}%`;
+  if(previewView?.dataURL)showSourcePreview(previewView);
+});
+const settingsPanel=$('settings-panel') as HTMLDetailsElement;
+function closeSettings(){settingsPanel.open=false;}
+for(const id of ['close-settings','settings-scrim'])bind(id,closeSettings);
+settingsPanel.addEventListener('toggle',()=>{
+  for(const id of ['app-header','paper-header','reading-workspace','action-dock'])$(id).inert=settingsPanel.open;
+  if(settingsPanel.open)$('close-settings').focus();else $('settings-summary').focus();
+});
+settingsPanel.addEventListener('keydown',event=>{
+  if(!settingsPanel.open)return;
+  if(event.key==='Escape'){event.preventDefault();closeSettings();}
+  if(event.key==='Tab'){
+    const fields=[...$('settings-drawer').querySelectorAll<HTMLElement>('button,input,select,textarea,summary')]
+      .filter(el=>!(el as HTMLInputElement).disabled&&el.getClientRects().length>0);
+    const first=fields[0],last=fields.at(-1);
+    if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}
+    else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
+  }
+});
 function remapTextRanges<T extends {start:number;end:number}>(before:string,after:string,ranges:T[]=[]):T[]{
   let prefix=0;
   while(prefix<before.length&&prefix<after.length&&before[prefix]===after[prefix])prefix++;
@@ -81,6 +146,7 @@ function formSettings() {
 }
 function showSettings() {
   const s=resolveSettings(host.settings());providerOrder=[...s.routing.order];
+  if(!settingsShown){editingModel=providerOrder.find(name=>s.routing.enabled[name]&&s.routing[name].model)||providerOrder[0];settingsShown=true;}
   input('auto-fallback').checked=s.routing.autoFallback;area('prompt').value=s.prompt;
   input('vision-before-review').checked=s.visionBeforeReview===true;
   for(const name of PROVIDERS){
@@ -94,20 +160,24 @@ function configurationView(){
     const root=$('provider-list'),card=$(`${name}-profile`);
     if(root.children[index]!==card)root.insertBefore(card,root.children[index]||null);
     $(`${name}-priority`).textContent=`优先级 ${index+1}`;
+    $(`${name}-fields`).hidden=name!==editingModel;
+    card.classList.toggle('active',name===editingModel);
+    $(`${name}-description`).textContent=input(profileIDs[name].model).value.trim()||'未配置';
     input(`${name}-up`).disabled=busy||switching||index===0;
     input(`${name}-down`).disabled=busy||switching||index===providerOrder.length-1;
   }
   for(const [name,ids] of Object.entries(profileIDs)){
     try{
-      const has=host.hasKey(input(ids.base).value);
-      input(ids.key).placeholder=has?'已保存；留空保留现有 Key':name==='codex'?'本机 Codex 代理留空':'输入 API Key';
+      const has=host.hasKey(input(ids.base).value,name);
+      input(ids.key).placeholder=has?'已保存；留空保留现有 Key':'输入 Key；本地无密钥服务可留空';
       $(ids.status).textContent=has?'此端点已保存 Key':'此端点未保存 Key';
     }catch{$(ids.status).textContent='此端点尚未配置';}
   }
-  const plan=planProviders(formSettings(),base=>{
-    const pending=Object.values(profileIDs).find(ids=>input(ids.base).value.trim()===base&&input(ids.key).value.trim());
-    return pending?input(pending.key).value:host.hasKey(base)?'saved-key-present':'';
+  const plan=planProviders(formSettings(),(base,name)=>{
+    const key=input(profileIDs[name].key).value.trim();
+    return key|| (host.hasKey(base,name)?'saved-key-present':'');
   });
+  $('model-summary').textContent=plan.ready.length?`${PROVIDER_LABELS[plan.ready[0].name]} · ${plan.ready[0].settings.model}${plan.ready.length>1?` · ${plan.ready.length-1} 项备用`:''}`:'尚无可用模型';
   $('fallback-status').textContent=(plan.ready.length?`调用顺序：${plan.ready.map(p=>PROVIDER_LABELS[p.name]).join(' → ')}`:'尚无可调用服务')+
     (plan.skipped.length?`；已跳过：${plan.skipped.map(p=>`${PROVIDER_LABELS[p.name]}（${p.reason}）`).join('、')}`:'');
 }
@@ -122,7 +192,7 @@ async function persistSettings(remove?:ProviderName) {
 async function provider(signal: AbortSignal) {
   phase('准备模型设置');status('正在检查模型设置…');
   const saved = await persistSettings(),routing=saved.routing;
-  const plan=planProviders(saved,base=>host.apiKey(base));
+  const plan=planProviders(saved,(base,name)=>host.apiKey(base,name));
   if(!plan.ready.length){
     ($('settings-panel') as HTMLDetailsElement).open=true;
     throw new Error('没有可调用的模型服务。请至少启用一项并填写地址、模型和 API Key；本机无密钥服务可留空 Key。');
@@ -130,7 +200,7 @@ async function provider(signal: AbortSignal) {
   const activeIndex=taskProvider?plan.ready.findIndex(p=>p.name===taskProvider):-1;
   const [first,...remaining]=plan.ready.slice(Math.max(0,activeIndex)),settings=first.settings;
   taskProvider=first.name;
-  $('provider-status').textContent=`当前服务：${PROVIDER_LABELS[first.name]} · 按列表从上到下调用`;
+  $('provider-status').textContent=`当前模型：${PROVIDER_LABELS[first.name]} · ${settings.model}`;
   return { client: new Provider(settings, first.key, signal,(request,requestId='request')=>{
     if(request){
       const previous=requestStates.get(requestId);
@@ -204,8 +274,10 @@ function list() {
     button.append(meta, excerpt); button.addEventListener('click', () => select(b)); root.appendChild(button);
   }
 }
-function select(block: Block) {
+function select(block: Block,follow=true) {
+  const previousID=selected?.id;
   selected = block;
+  if(follow||previousID!==block.id)void sourcePreview.show(project!,block);
   $('block-title').textContent = `${block.id} · 源页 ${block.rects.map(r => r[0]+1).filter((p,i,a) => a.indexOf(p) === i).join(', ')}`;
   area('source').value = block.proseGroup?.source||block.source;
   area('translation').value = block.translation;
@@ -230,7 +302,7 @@ function refresh() {
   area('terms').value = project.terms.map(t => t.source).join('\n');
   $('terms-action').textContent = project.terminologyReady ? '重新识别术语（覆盖词表）' :
     project.terminologyBatches?.length ? `继续识别术语（已保存 ${project.terminologyBatches.length} 批）` : '识别本文术语';
-  if (selected) select(project.blocks.find(b => b.id === selected!.id) || project.blocks[0]);
+  if (selected) select(project.blocks.find(b => b.id === selected!.id) || project.blocks[0],false);
   else if (project.blocks.length) select(project.blocks[0]);
   updateControls();
 }
@@ -274,15 +346,16 @@ async function run(job: (signal: AbortSignal) => Promise<void>) {
 function bind(id: string, fn: () => void | Promise<void>) {
   $(id).addEventListener('click', () => { Promise.resolve().then(fn).catch(e => status(e.message,true)); });
 }
-bind('save-settings', async () => { await persistSettings(); status('模型设置已保存。'); });
+bind('save-settings', async () => { await persistSettings(); if(configured())($('settings-panel') as HTMLDetailsElement).open=false;status('模型设置已保存。'); });
 bind('use-codex-proxy',()=>{
-  input('codex-base').value=CODEX_DEFAULT.baseURL;input('codex-model').value=CODEX_DEFAULT.model;input('codex-key').value='';
-  input('codex-enabled').checked=true;providerOrder=['codex',...providerOrder.filter(name=>name!=='codex')];configurationView();
-  status('已填写本机代理。请先启动配套代理脚本，再点击「保存设置」。');
+  const ids=profileIDs[editingModel];
+  input(ids.base).value=CODEX_DEFAULT.baseURL;input(ids.model).value=CODEX_DEFAULT.model;input(ids.key).value='';
+  input(`${editingModel}-enabled`).checked=true;configurationView();
+  status(`已填入 ${PROVIDER_LABELS[editingModel]}。请保持本机代理运行，再保存设置。`);
 });
-bind('delete-key', async () => { await persistSettings('custom'); status('已删除自定义端点的 Key。'); });
-bind('delete-codex-key', async () => { await persistSettings('codex'); status('已删除 Codex 端点的 Key。'); });
-bind('delete-deepseek-key', async () => { await persistSettings('deepseek'); status('已删除 DeepSeek 端点的 Key。'); });
+bind('delete-key', async () => { await persistSettings('custom'); status('已删除模型 3 在此地址的 Key。'); });
+bind('delete-codex-key', async () => { await persistSettings('codex'); status('已删除模型 1 在此地址的 Key。'); });
+bind('delete-deepseek-key', async () => { await persistSettings('deepseek'); status('已删除模型 2 在此地址的 Key。'); });
 bind('save-edit', async () => { await save(); status('修订已保存；点击「翻译并生成 PDF」可更新阅读副本。'); });
 bind('cancel', () => { abort?.abort(); status('正在取消当前任务；已保存的译文会保留…'); });
 async function identifyTerms(client: Provider) {
@@ -417,7 +490,7 @@ async function repairReview(signal:AbortSignal,onlyIDs?:Set<string>){
 }
 bind('repair-review',()=>run(repairReview));
 async function visionClient(signal:AbortSignal){
-  const saved=await persistSettings(),plan=planProviders(saved,base=>host.apiKey(base));
+  const saved=await persistSettings(),plan=planProviders(saved,(base,name)=>host.apiKey(base,name));
   const chosen=plan.ready.find(p=>p.name===taskProvider)||plan.ready[0];
   if(!chosen)throw new Error('没有可调用的图片识别模型。请启用模型并填写地址、模型名称及所需 Key。');
   const {name,settings:profile,key}=chosen;
@@ -576,6 +649,7 @@ for(const ids of Object.values(profileIDs)){
   input(ids.key).addEventListener('input',configurationView);
 }
 for(const name of PROVIDERS){
+  bind(`${name}-edit`,()=>{editingModel=name;configurationView();});
   input(`${name}-enabled`).addEventListener('change',configurationView);
   for(const [direction,delta] of [['up',-1],['down',1]] as const)bind(`${name}-${direction}`,()=>{
     const index=providerOrder.indexOf(name),next=index+delta;
@@ -587,9 +661,9 @@ input('auto-fallback').addEventListener('change',configurationView);
 window.addEventListener('beforeunload', event => {
   if (busy || dirty || visionDrafts.size) { event.preventDefault(); event.returnValue = ''; }
 });
-window.addEventListener('unload', () => { abort?.abort(); clearTimeout(autosave);clearInterval(progressTimer); if (dirty) void save().catch(() => {}); });
+window.addEventListener('unload', () => { sourcePreview.cancel();abort?.abort(); clearTimeout(autosave);clearInterval(progressTimer); if (dirty) void save().catch(() => {}); });
 (window as any).paperWeaveBeforeShutdown = async () => {
-  abort?.abort();
+  sourcePreview.cancel();abort?.abort();
   await save();
   busy = false; dirty = false;
 };
@@ -625,7 +699,7 @@ const currentTitle=()=>project?.source.title||host.binding?.title||$('paper-titl
     if(project!.extractionUpgradeAttempted===EXTRACTION_VERSION && project!.extractionVersion!==EXTRACTION_VERSION)
       status('未能安全更新旧项目的段落结构，原项目与译文均已保留。');
   });
-  if (!host.hasKey(host.settings().baseURL)) ($('settings-panel') as HTMLDetailsElement).open = true;
+  ($('settings-panel') as HTMLDetailsElement).open=!configured();
 }
 
 function start() {

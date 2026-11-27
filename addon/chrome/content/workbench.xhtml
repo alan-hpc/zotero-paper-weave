@@ -1,92 +1,57 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN" windowtype="paperweave:workbench">
-<head>
-  <title>PaperWeave · 论文织译</title>
-  <meta charset="utf-8" />
-  <link rel="stylesheet" href="workbench.css" />
-</head>
+<head><title>PaperWeave · 论文织译</title><meta charset="utf-8" /><link rel="stylesheet" href="workbench.css" /></head>
 <body>
-  <header><img src="icon.svg" width="38" height="38" alt="" />
-    <div><h1>PaperWeave <span>论文织译</span><small>ALPHA</small></h1><p id="paper-title">正在载入 PDF…</p></div>
-  </header>
-  <details id="settings-panel">
-    <summary>模型与翻译偏好</summary>
-    <p class="hint">按从上到下的顺序调用已启用且配置完整的服务。只用 DeepSeek 时，仅启用 DeepSeek 并填写其配置即可；其他服务可以留空。</p>
-    <label class="inline"><input id="auto-fallback" type="checkbox" />额度耗尽时按顺序切换到下一可用服务</label>
-    <p class="hint">切换会将未完成的论文文本发送到下一服务，并可能按其账户计费；已有译文继续使用缓存。</p>
+<header class="app-header" id="app-header"><div class="brand"><img src="icon.svg" width="28" height="28" alt="" /><strong>PaperWeave</strong><span>论文织译</span></div><span class="version-label">ALPHA</span></header>
+<section class="paper-header" id="paper-header"><span class="eyebrow">当前论文</span><h1 id="paper-title">正在载入 PDF…</h1><p class="hint">原文 60% / 中文 40% · 图表与公式保留原貌 · 生成后更新同一阅读副本</p></section>
+<details id="settings-panel" class="settings-panel">
+  <summary id="settings-summary"><strong>模型与翻译偏好</strong><span id="model-summary">尚未配置模型</span><span class="settings-disclosure">展开 / 收起</span></summary>
+  <button class="settings-scrim" id="settings-scrim" aria-label="关闭模型设置" type="button"></button>
+  <section class="settings-drawer" id="settings-drawer" role="dialog" aria-modal="true" aria-label="模型与翻译偏好设置">
+    <div class="drawer-heading"><div><h2>模型与翻译偏好</h2><p class="hint">每项可填写任意兼容 API，按从上到下的顺序调用。</p></div><button id="close-settings" type="button" aria-label="关闭模型设置">关闭</button></div>
     <div id="provider-list">
-    <fieldset id="codex-profile" class="provider-profile"><legend><span id="codex-priority"></span> Codex</legend>
-    <div class="row"><label class="inline"><input id="codex-enabled" type="checkbox" />启用 Codex</label><button id="codex-up" class="subtle" aria-label="提高 Codex 优先级">上移</button><button id="codex-down" class="subtle" aria-label="降低 Codex 优先级">下移</button></div><div class="settings-grid">
-      <label>Codex Base URL<input id="codex-base" type="url" placeholder="http://127.0.0.1:47771/v1" /></label>
-      <label>Codex 模型<input id="codex-model" type="text" placeholder="codex-local" /></label>
-      <label>Codex API Key（本机代理留空）<input id="codex-key" type="password" autocomplete="off" /></label>
-    </div><div class="row"><button id="use-codex-proxy" class="subtle">填写本机 Codex 代理</button><button id="delete-codex-key" class="subtle">删除 Codex Key</button><span id="codex-key-status"></span></div></fieldset>
-    <fieldset id="deepseek-profile" class="provider-profile"><legend><span id="deepseek-priority"></span> DeepSeek API</legend>
-    <div class="row"><label class="inline"><input id="deepseek-enabled" type="checkbox" />启用 DeepSeek</label><button id="deepseek-up" class="subtle" aria-label="提高 DeepSeek 优先级">上移</button><button id="deepseek-down" class="subtle" aria-label="降低 DeepSeek 优先级">下移</button></div><div class="settings-grid">
-      <label>DeepSeek Base URL<input id="deepseek-base" type="url" placeholder="https://api.deepseek.com/v1" /></label>
-      <label>DeepSeek 模型<input id="deepseek-model" type="text" placeholder="deepseek-flash" /></label>
-      <label>DeepSeek API Key<input id="deepseek-key" type="password" autocomplete="off" /></label>
-    </div><div class="row"><button id="delete-deepseek-key" class="subtle">删除 DeepSeek Key</button><span id="deepseek-key-status"></span></div>
-    <p class="hint">DeepSeek 支持图片的模型可用于识别。图片识别跟随当前选定的服务和模型，不固定使用 DeepSeek。</p></fieldset>
-    <fieldset id="custom-profile" class="provider-profile"><legend><span id="custom-priority"></span> 其他兼容 API</legend>
-    <div class="row"><label class="inline"><input id="custom-enabled" type="checkbox" />启用其他 API</label><button id="custom-up" class="subtle" aria-label="提高其他 API 优先级">上移</button><button id="custom-down" class="subtle" aria-label="降低其他 API 优先级">下移</button></div><div class="settings-grid">
-      <label>API Base URL<input id="base" type="url" placeholder="https://your-service.example/v1" /></label>
-      <label>模型名称<input id="model" type="text" placeholder="账户可用的模型 ID" /></label>
-      <label>API Key<input id="key" type="password" autocomplete="off" placeholder="本地无密钥服务可留空" /></label>
-    </div><div class="row"><button id="delete-key" class="subtle">删除此端点的 Key</button><span id="key-status"></span></div></fieldset>
+      <fieldset id="codex-profile" class="provider-profile"><legend>模型 1 <span id="codex-priority"></span></legend>
+        <div class="model-row"><label class="inline"><input id="codex-enabled" type="checkbox" />启用</label><span id="codex-description" class="model-description">未配置</span><button id="codex-edit" type="button">编辑</button><button id="codex-up" type="button" aria-label="提高模型 1 优先级">上移</button><button id="codex-down" type="button" aria-label="降低模型 1 优先级">下移</button></div>
+        <div id="codex-fields" class="model-fields"><label>API Base URL<input id="codex-base" type="url" placeholder="https://your-api.example/v1" /></label><label>模型 ID<input id="codex-model" type="text" placeholder="账户可用的模型 ID" /></label><label>API Key<input id="codex-key" type="password" autocomplete="off" /></label><div class="row"><button id="delete-codex-key" type="button" class="subtle">删除此模型的 Key</button><span id="codex-key-status" class="hint"></span></div></div>
+      </fieldset>
+      <fieldset id="deepseek-profile" class="provider-profile"><legend>模型 2 <span id="deepseek-priority"></span></legend>
+        <div class="model-row"><label class="inline"><input id="deepseek-enabled" type="checkbox" />启用</label><span id="deepseek-description" class="model-description">未配置</span><button id="deepseek-edit" type="button">编辑</button><button id="deepseek-up" type="button" aria-label="提高模型 2 优先级">上移</button><button id="deepseek-down" type="button" aria-label="降低模型 2 优先级">下移</button></div>
+        <div id="deepseek-fields" class="model-fields" hidden="hidden"><label>API Base URL<input id="deepseek-base" type="url" placeholder="https://your-api.example/v1" /></label><label>模型 ID<input id="deepseek-model" type="text" placeholder="账户可用的模型 ID" /></label><label>API Key<input id="deepseek-key" type="password" autocomplete="off" /></label><div class="row"><button id="delete-deepseek-key" type="button" class="subtle">删除此模型的 Key</button><span id="deepseek-key-status" class="hint"></span></div></div>
+      </fieldset>
+      <fieldset id="custom-profile" class="provider-profile"><legend>模型 3 <span id="custom-priority"></span></legend>
+        <div class="model-row"><label class="inline"><input id="custom-enabled" type="checkbox" />启用</label><span id="custom-description" class="model-description">未配置</span><button id="custom-edit" type="button">编辑</button><button id="custom-up" type="button" aria-label="提高模型 3 优先级">上移</button><button id="custom-down" type="button" aria-label="降低模型 3 优先级">下移</button></div>
+        <div id="custom-fields" class="model-fields" hidden="hidden"><label>API Base URL<input id="base" type="url" placeholder="https://your-api.example/v1" /></label><label>模型 ID<input id="model" type="text" placeholder="账户可用的模型 ID" /></label><label>API Key<input id="key" type="password" autocomplete="off" /></label><div class="row"><button id="delete-key" type="button" class="subtle">删除此模型的 Key</button><span id="key-status" class="hint"></span></div></div>
+      </fieldset>
     </div>
-    <label>补充翻译偏好（可选）<textarea id="prompt" rows="2" placeholder="例如：行文简洁，保留原文中的所有符号。"></textarea></label>
-    <div class="row"><button id="save-settings">保存全部设置</button><span id="fallback-status"></span></div>
-    <p class="hint">本机 Codex 代理需保持配套脚本运行。codex-local 使用 CLI 默认模型，也可填写具体模型 ID；Key 留空，使用 Codex 的 ChatGPT 登录。每次新任务从列表顶部开始；额度耗尽后，本次任务后续请求继续使用切换后的服务。</p>
-    <p class="hint">普通排队、临时限速和网络错误会有限重试，不触发额度切换。Key 存于 Zotero 凭据管理器；不会写入翻译项目或 PDF。</p>
-  </details>
-  <nav aria-label="翻译操作">
-    <button id="start" class="primary">翻译并生成 PDF</button>
-    <button id="restart">重新翻译并生成 PDF</button>
-    <button id="cancel" disabled="disabled">取消</button>
-  </nav>
-  <p class="hint">「翻译并生成 PDF」复用已有译文；「重新翻译并生成 PDF」使用当前模型重译自动译文，保留人工修订和本文术语表。通过校验后逐段保存，中断可续跑；完成后更新同一阅读副本。</p>
-  <label class="inline"><input id="vision-before-review" type="checkbox" />生成 PDF 前，自动检查并修复疑难段落（无需人工确认）</label>
-  <p class="hint">使用当前支持图片的模型自动识别、复查和重译，只上传目标区域及公式细节，使用对应服务的额度。先核验并复用已有中文；复杂公式可单独按原貌嵌入，中文继续排版。最终无法确认的内容明确保留原图；已有译文和人工修订保留。</p>
-  <section id="task-progress" data-busy="false" aria-label="任务进度">
-    <div id="status" role="status" aria-live="polite">准备中…</div>
-    <p id="provider-status" class="hint" role="status" aria-live="polite"></p>
-    <div class="progress-track"><span id="progress-detail"></span><progress id="job-progress" max="1" value="0" aria-label="当前阶段进度"></progress></div>
-    <div class="progress-meta"><span id="request-detail"></span><span id="progress-time"></span></div>
+    <p id="fallback-status" class="hint"></p>
+    <label class="inline preference"><input id="auto-fallback" type="checkbox" />额度耗尽时按顺序切换到下一可用模型</label>
+    <p class="hint">临时限速和网络错误在原模型重试。切换后的服务可能按其账户计费。</p>
+    <label class="preference">补充翻译偏好<textarea id="prompt" rows="3" placeholder="例如：行文简洁，保留技术术语。"></textarea></label>
+    <label class="inline preference"><input id="vision-before-review" type="checkbox" />生成 PDF 前自动检查并修复疑难段落</label>
+    <p class="hint">跟随当前支持图片的模型，只发送目标区域和公式细节，无需逐段确认。无法可靠恢复的内容明确保留原貌。</p>
+    <details class="advanced"><summary>本机代理与凭据说明</summary><button id="use-codex-proxy" type="button">将本机 Codex 代理填入当前模型</button><p class="hint">也可在任意模型项中手动填写地址和模型 ID。本机无密钥服务的 Key 可留空；本机 Codex 代理需保持运行。</p><p class="hint">Key 按配置项与接口地址保存在 Zotero 凭据管理器，不写入翻译项目或 PDF。同一接口的多个模型可以使用不同 Key。</p></details>
+    <div class="drawer-save"><button id="save-settings" type="button" class="primary">保存全部设置</button></div>
   </section>
-  <p class="hint">排版 B · 原文左侧 60% / 中文右侧 40% · 正文两端对齐，段末左对齐 · 中间竖线</p>
-  <p class="hint">作者、单位、邮箱与通讯作者说明仅保留在左侧原页，不参与正文翻译；已有译文缓存保留。需要翻译某个区域时，可手动改为正文。</p>
-  <p class="hint">算法、图表、图注与表注整组保留原文，每个区域仅输出一次；内部步骤不单独翻译。空间不足时整组续页。修订后点击「保存修订」，再点击「翻译并生成 PDF」更新阅读副本。</p>
-  <p class="hint">字体：正文与英文术语使用思源宋体 · 行内代码使用更纱等宽字体</p>
-  <p id="project-summary" class="hint">尚未载入翻译项目</p>
-  <p id="math-summary" class="hint">数学表达正在识别…</p>
-  <details><summary>分步操作：词表与翻译</summary><div class="row"><button id="terms-action">识别本文术语</button><button id="translate">仅翻译未完成段落</button><button id="repair-review">重译需复核段落（保留人工修订）</button></div><p class="hint">已有译文默认保留。结构升级后，可重译需复核的自动译文；只有成功返回并通过校验后才覆盖该段，失败可继续。</p></details>
-  <p class="notice">图表、图注、表格、算法、公式、代码及参考文献默认保留原文。启用自动检查后，疑难段落自动处理，无需逐段确认。扫描件需先 OCR。</p>
-  <main>
-    <aside><div class="list-heading"><strong>段落</strong><select id="filter" aria-label="筛选段落"><option value="all">全部</option><option value="pending">未翻译</option><option value="editable">正文 / 标题</option><option value="math-review">公式 / 格式需复核</option><option value="keep">保留英文</option></select></div><div id="block-list"></div></aside>
-    <section class="editor">
-      <div class="row"><strong id="block-title">请选择段落</strong><label class="inline">区域类型 <select id="kind"><option value="body">正文（翻译）</option><option value="heading">标题（翻译）</option><option value="figure">图（原文）</option><option value="caption">图注 / 表注（原文）</option><option value="table">表格（原文）</option><option value="math">公式（原文）</option><option value="code">代码（原文）</option><option value="reference">参考文献（原文）</option><option value="keep">其他（保留英文）</option></select></label></div>
-      <label class="area">英文原文<textarea id="source" readonly="readonly" spellcheck="false"></textarea></label>
-      <details id="vision-panel"><summary>当前模型图片识别与可选修订</summary>
-        <p class="hint">“图片识别本段”会上传这一段的原文截图。识别结果单独保存，采用后用于之后的翻译；已有译文不会因识别而直接覆盖。</p>
-        <div class="row"><button id="vision-preview">查看原文截图（本地）</button><button id="vision-recognize">图片识别本段（当前模型）</button></div>
-        <p id="vision-status" class="hint"></p><div id="vision-images"></div>
-        <div id="vision-result" hidden="hidden"><label class="area">识别原文（可修订，数学使用 LaTeX）<textarea id="vision-text" spellcheck="false" rows="8"></textarea></label>
-          <div class="row"><button id="vision-save">保存识别修订</button><button id="vision-apply">采用当前识别</button><button id="vision-restore">恢复本地识别</button></div>
-        </div>
-      </details>
-      <label class="area">中文译文（可以直接修改）<textarea id="translation" spellcheck="false" placeholder="生成译文后可在此修订；原文保留区域无需填写。"></textarea></label>
-      <p class="hint">结构明确的行内数学用 LaTeX 离线排版；复杂结构不明时保留完整原文段落并提示复核。独立公式保留原貌。手工修订支持 <code>\(R_1^T\)</code>、<code>\(\frac{x}{y}\)</code>。</p>
-      <div class="row"><button id="save-edit">保存修订</button><button id="retranslate">重新翻译本段（覆盖）</button><span id="edit-status"></span></div>
-    </section>
-  </main>
-  <details id="terms-panel"><summary>本文术语表（每行一个；保留英文原样）</summary><textarea id="terms" rows="6" spellcheck="false"></textarea><p class="hint">自动识别后可增删。变更词表会用于之后的翻译；已有译文需选择对应段落重新翻译。每篇论文使用独立词表。</p><button id="save-terms">保存词表</button></details>
-  <footer>
-    <label class="inline"><input id="make-preferred" type="checkbox" checked="checked" />生成后优先打开双语 PDF</label>
-    <div class="row"><button id="prefer-original">优先打开原文</button><button id="export">导出修订项目</button><button id="import">导入修订项目（覆盖译文）</button></div>
-    <p class="hint">项目自动保存在本机 Zotero 数据目录，默认不随 Zotero 同步。重新生成会覆盖同一 PDF 附件；成功后重复译本移入回收站。现有批注记录保留，重排后位置可能偏移。</p>
-    <p class="hint">优先打开选择保存在本机，重启后保留；停用插件后使用 Zotero 默认顺序。原文附件始终保留。</p>
-  </footer>
-  <script src="workbench.js"></script>
+</details>
+<main class="reading-workspace" id="reading-workspace">
+  <aside class="paragraph-pane"><div class="list-heading"><strong>段落</strong><select id="filter" aria-label="筛选段落"><option value="all">全部</option><option value="pending">未翻译</option><option value="editable">正文 / 标题</option><option value="math-review">公式 / 格式需复核</option><option value="keep">保留英文</option></select></div><div id="block-list"></div></aside>
+  <section class="original-pane" aria-label="对应原文">
+    <div class="pane-heading"><strong id="source-page-label">原文预览</strong><div class="row"><button id="source-prev" type="button" aria-label="上一原文页">上一页</button><button id="source-next" type="button" aria-label="下一原文页">下一页</button><select id="source-zoom" aria-label="原文缩放"><option value="1">适合宽度</option><option value="1.5">150%</option><option value="2">200%</option></select></div></div>
+    <div id="source-viewport" class="source-viewport"><p id="source-preview-status" role="status" class="hint">选择段落后定位对应原文。</p><div id="source-sheet" class="source-sheet"><img id="source-image" alt="原文整页预览" draggable="false" hidden="hidden" /><div id="source-highlights" class="source-highlights"></div></div></div>
+    <details id="source-text" class="source-text"><summary>该段提取文本</summary><textarea id="source" readonly="readonly" spellcheck="false" aria-label="英文原文"></textarea></details>
+  </section>
+  <section class="translation-pane" aria-label="可编辑中文译文">
+    <div class="pane-heading"><strong>对应中文</strong><span id="block-title">请选择段落</span></div>
+    <div class="translation-content"><label class="translation-label">中文译文<textarea id="translation" spellcheck="false" placeholder="译文可直接修订，人工修订会保留。"></textarea></label><div class="revision-actions"><span id="edit-status" role="status"></span><div class="row"><button id="save-edit" type="button">保存修订</button><button id="retranslate" type="button" class="subtle">重译本段（覆盖）</button></div></div>
+    <details id="vision-panel" class="advanced"><summary>段落格式与图片识别</summary><label>区域类型<select id="kind"><option value="body">正文（翻译）</option><option value="heading">标题（翻译）</option><option value="figure">图（原文）</option><option value="caption">图注 / 表注（原文）</option><option value="table">表格（原文）</option><option value="math">公式（原文）</option><option value="code">代码（原文）</option><option value="reference">参考文献（原文）</option><option value="keep">其他（保留英文）</option></select></label><div class="row"><button id="vision-preview" type="button">查看本段截图</button><button id="vision-recognize" type="button">图片识别本段</button></div><p id="vision-status" class="hint"></p><div id="vision-images"></div><div id="vision-result" hidden="hidden"><label>识别原文<textarea id="vision-text" spellcheck="false" rows="8"></textarea></label><div class="row"><button id="vision-save" type="button">保存识别修订</button><button id="vision-apply" type="button">采用当前识别</button><button id="vision-restore" type="button">恢复本地识别</button></div></div><p class="hint">识别只发送本段原图；采用识别不会直接覆盖旧译文。明确的行内公式可用 LaTeX 修订。</p></details>
+    <details id="terms-panel" class="advanced"><summary>本文术语表</summary><textarea id="terms" rows="6" spellcheck="false" aria-label="本文术语表，每行一个"></textarea><p class="hint">每篇论文独立识别；一行一个保留英文的术语。</p><div class="row"><button id="save-terms" type="button">保存词表</button><button id="terms-action" type="button">识别本文术语</button></div></details></div>
+  </section>
+</main>
+<footer class="action-dock" id="action-dock">
+  <section id="task-progress" data-busy="false" aria-label="任务进度"><div id="status" role="status" aria-live="polite">准备中…</div><p id="provider-status" class="hint" role="status"></p><div class="progress-track"><span id="progress-detail"></span><progress id="job-progress" max="1" value="0" aria-label="当前阶段进度"></progress></div><div class="progress-meta"><span id="request-detail"></span><span id="progress-time"></span></div></section>
+  <nav aria-label="翻译操作"><button id="start" type="button" class="primary" title="复用已有译文，继续未完成任务并生成 PDF">翻译并生成 PDF</button><button id="restart" type="button" title="用当前模型重译自动译文；保留人工修订">重新翻译并生成 PDF</button><button id="cancel" type="button" disabled="disabled">取消</button></nav>
+  <details id="more-tools" class="more-tools"><summary>进度详情与更多操作</summary><p id="project-summary" class="hint">尚未载入翻译项目</p><p id="math-summary" class="hint"></p><label class="inline"><input id="make-preferred" type="checkbox" checked="checked" />生成后优先打开阅读副本</label><div class="row"><button id="translate" type="button">仅翻译未完成段落</button><button id="repair-review" type="button">重译需复核段落</button><button id="prefer-original" type="button">优先打开原文</button><button id="export" type="button">导出修订项目</button><button id="import" type="button">导入修订项目</button></div><p class="hint">原始 PDF、已有译文与人工修订保留。图表、图注、表格、算法和独立公式整组保留原貌；作者信息仅留在左侧原页。译文项目本机保存，默认不随 Zotero 同步；更新同一 PDF 保留批注记录，重排后位置可能偏移。</p></details>
+</footer>
+<script src="workbench.js"></script>
 </body></html>

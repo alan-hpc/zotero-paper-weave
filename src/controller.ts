@@ -5,13 +5,13 @@ import { rebaseMathRefs } from './inlineMath';
 import { endpoint } from './provider';
 import { PreferredAttachments } from './preferred';
 import { readAsset } from './assets';
-import { resolveSettings } from './settings';
+import { resolveSettings,PROVIDERS } from './settings';
 import { applyAuthorMetadata } from './frontMatter';
 import { applyGraphicRegions } from './graphics';
 import { assertAttachment, assertProjectIdentity } from './paperIdentity';
 import { snippetRenderer } from './snippets';
 import { captureVisionImages } from './visionCapture';
-import { visionMatches } from './vision';
+import { visionMatches,pngDataURL } from './vision';
 import { copyBytes,ByteSource } from './bytes';
 import { applyProseGroups } from './proseGroups';
 import {persistOutput,refreshOutput} from './outputs';
@@ -28,7 +28,7 @@ let workbenchOpening:Promise<void>|undefined;
 let preferred: PreferredAttachments;
 const pref = 'extensions.paperweave.';
 const origin = 'chrome://paperweave';
-const realm = (base: string) => endpoint(base);
+const realm = (base: string,name?:ProviderName) => endpoint(base)+(name?'#paperweave-'+name:'');
 const directory = () => PathUtils.join(Zotero.DataDirectory.dir, 'paperweave');
 const WORKBENCH_URL='chrome://paperweave/content/workbench.xhtml';
 const WORKBENCH_NAME='paperweave-workbench';
@@ -96,32 +96,42 @@ export async function start(m: typeof meta) {
 export function settings(): Settings {
   let routing;try{routing=JSON.parse(Zotero.Prefs.get(pref+'routing',true)||'null');}catch{}
   return resolveSettings({
-    baseURL: Zotero.Prefs.get(pref + 'baseURL', true) || 'https://api.deepseek.com/v1',
-    model: Zotero.Prefs.get(pref + 'model', true) || 'deepseek-flash',
+    baseURL: Zotero.Prefs.get(pref + 'baseURL', true) || '',
+    model: Zotero.Prefs.get(pref + 'model', true) || '',
     prompt: Zotero.Prefs.get(pref + 'prompt', true) || '',routing,visionBeforeReview:Zotero.Prefs.get(pref+'visionBeforeReview',true)===true
   });
 }
-function logins(base: string): any[] { return Services.logins.findLogins(origin, null, realm(base)); }
-export function hasKey(base: string) { return logins(base).length > 0; }
-export function apiKey(base: string) { return logins(base)[0]?.password || ''; }
+function logins(base: string,name?:ProviderName): any[] { return Services.logins.findLogins(origin, null, realm(base,name)); }
+function credentialOverrides():Set<string>{
+  try{const saved=JSON.parse(Zotero.Prefs.get(pref+'credentialOverrides',true)||'[]');return new Set(Array.isArray(saved)?saved.filter(v=>typeof v==='string'):[]);}catch{return new Set();}
+}
+export function apiKey(base: string,name?:ProviderName):string {
+  if(name){
+    const scoped=logins(base,name)[0];if(scoped)return scoped.password||'';
+    if(credentialOverrides().has(realm(base,name)))return '';
+  }
+  return logins(base)[0]?.password||'';
+}
+export function hasKey(base: string,name?:ProviderName) { return !!apiKey(base,name); }
 export async function saveSettings(value: Settings, key: string|Partial<Record<ProviderName,string>>, removeKey:boolean|ProviderName = false) {
   const resolved=resolveSettings(value),routing=resolved.routing;
-  const changes=typeof key==='string'?[{baseURL:resolved.baseURL,key,remove:removeKey===true}]:
-    (['codex','deepseek','custom'] as const).map(name=>({baseURL:routing[name].baseURL,key:key[name]?.trim()||'',remove:removeKey===name}));
+  const changes=typeof key==='string'?[{baseURL:resolved.baseURL,key,remove:removeKey===true,name:undefined as ProviderName|undefined}]:
+    PROVIDERS.map(name=>({baseURL:routing[name].baseURL,key:key[name]?.trim()||'',remove:removeKey===name,name}));
   // Validate all credential destinations before changing any saved key. Empty unused
   // profiles may be saved; task routing reports and skips incomplete profiles.
   for(const change of changes)if(change.key||change.remove)endpoint(change.baseURL);
   for(const change of changes){
     if(!change.remove&&!change.key)continue;
-    const existing = logins(change.baseURL);
+    const existing = logins(change.baseURL,change.name);
     if (change.remove) for (const entry of existing) Services.logins.removeLogin(entry);
     if (change.key && !change.remove) {
       const entry = Cc['@mozilla.org/login-manager/loginInfo;1'].createInstance(Ci.nsILoginInfo);
-      entry.init(origin, null, realm(change.baseURL), 'api-key', change.key, '', '');
+      entry.init(origin, null, realm(change.baseURL,change.name), 'api-key', change.key, '', '');
       if (existing.length) Services.logins.modifyLogin(existing[0], entry);
       else await Services.logins.addLoginAsync(entry);
       for (const duplicate of existing.slice(1)) Services.logins.removeLogin(duplicate);
     }
+    if(change.name){const overrides=credentialOverrides();overrides.add(realm(change.baseURL,change.name));Zotero.Prefs.set(pref+'credentialOverrides',JSON.stringify([...overrides]),true);}
   }
   for (const name of ['baseURL','model','prompt'] as const) Zotero.Prefs.set(pref + name, resolved[name].trim(), true);
   Zotero.Prefs.set(pref+'routing',JSON.stringify(routing),true);
@@ -277,6 +287,7 @@ function createWorkbenchBridge(item:any,sessionID:string){
   const binding=Object.freeze({id:item.id,libraryID:item.libraryID,key:item.key,parentID:item.parentID,title:titleOf(item),sessionID});
   let loadedHash:string|undefined;
   let drawVision:Awaited<ReturnType<typeof snippetRenderer>>|undefined;
+  let drawPreview:Awaited<ReturnType<typeof snippetRenderer>>|undefined;
   const checkItem=(requested:any)=>{assertAttachment(requested,binding);assertAttachment(item,binding);};
   const checkProject=async(project:Project)=>{
     validateProject(project);checkItem(item);
@@ -293,6 +304,15 @@ function createWorkbenchBridge(item:any,sessionID:string){
     },
     saveProject:async(project:Project)=>{await checkProject(project);await saveProject(project);},
     sourceBytes:async(requested:any,project:Project)=>{checkItem(requested);await checkProject(project);return sourceBytes(item,project);},
+    sourcePreview:async(requested:any,project:Project,pageIndex:number,signal:AbortSignal)=>{
+      checkItem(requested);await checkProject(project);signal.throwIfAborted();
+      const page=project.pages[pageIndex],view=page?.viewRect;
+      if(!Number.isInteger(pageIndex)||!view||view.length!==4||!view.every(Number.isFinite)||view[2]<=view[0]||view[3]<=view[1]||(page.rotation||0)%360!==0)
+        throw new Error('原文预览的页码、页框或旋转信息无效。');
+      drawPreview ||= await snippetRenderer(Zotero,item,Cu,signal,{maxScale:3,maxPixels:3200000,maxDimension:2000});
+      const bytes=await drawPreview(pageIndex,{left:view[0],bottom:view[1],right:view[2],top:view[3]},signal);
+      await checkProject(project);signal.throwIfAborted();return pngDataURL(bytes);
+    },
     visionImages:async(requested:any,project:Project,blockID:string,signal:AbortSignal,progress:(s:string)=>void,mode:'paragraph'|'context'|'formula-tight'|'formula-wide'|'formula-isolated'='paragraph')=>{
       checkItem(requested);await checkProject(project);signal.throwIfAborted();
       const block=project.blocks.find(b=>b.id===blockID);

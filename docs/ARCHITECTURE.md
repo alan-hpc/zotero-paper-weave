@@ -22,6 +22,25 @@ flowchart LR
     G --> H[New Zotero attachment]
 ```
 
+## Reading workbench
+
+The workbench presents a paragraph list, original-page preview and Chinese editor. `sourcePreview.ts`
+converts bottom-left PDF rectangles into page-relative highlights, including nonzero crop origins.
+The source-bound controller bridge validates attachment/project/hash before and after local offscreen
+rendering and returns PNG text through the existing realm-safe byte boundary. Same-page selections
+share rendering; generation tokens discard obsolete completions even when cancellation is ignored.
+An in-memory cache retains at most three source/hash/page-geometry-bound images. No model call or
+vision-cache write occurs. Only the center viewport scrolls to the selected region; normal refreshes
+do not recenter it. Cross-page blocks start on their first source page with manual page navigation.
+
+Generic Model 1/2/3 slots retain historical storage identifiers for profile/provenance compatibility.
+Each accepts any compatible endpoint/model; routing and credential lookup include the slot name.
+New Login Manager realms include normalized endpoint plus slot. Legacy endpoint keys remain readable
+until that slot+endpoint is explicitly saved or deleted; non-secret override tombstones prevent
+deleted keys from reappearing through legacy lookup. Vendor wire flags require the actual vendor
+hostname and model. Settings fold when any enabled configuration is usable (including local no-Key
+services), otherwise open automatically. The drawer traps focus and makes the background inert.
+
 ## Boundaries
 
 `visionCapture.ts` uses the controller-bound source PDF and `snippets.ts` offscreen print rendering
@@ -86,11 +105,11 @@ The provider emits request waiting/retry states without response bodies or crede
 Transport failures and interrupted JSON bodies use the same bounded attempt budget as transient
 HTTP statuses; caller cancellation bypasses retries. Display timers reset on phase/attempt changes.
 
-`settings.ts` migrates the legacy endpoint to independent Codex/DeepSeek/custom profiles and
-whitelists persisted configuration fields; keys remain scoped to endpoint realms in Login Manager.
+`settings.ts` migrates the legacy endpoint to generic Model 1/2/3 slots (historical storage IDs remain) and
+whitelists persisted configuration fields; keys are scoped to slot+endpoint realms in Login Manager.
 One Provider instance shares a quota-triggered switch across terminology and paragraph workers.
-Only explicit Codex quota codes initiate configured DeepSeek fallback. Subsequent requests remain
-on DeepSeek for that task; a new task retries the primary. Response ownership is tracked per result,
+Only explicit quota/balance exhaustion initiates the next configured slot. Subsequent text requests
+remain on that selected slot for the task; a new task retries the first usable slot. Response ownership is tracked per result,
 so a late primary success retains correct provenance. Missing fallback credentials, cancellation and
 failed fallback requests do not oscillate between services or overwrite cached revisions.
 
@@ -208,7 +227,7 @@ succeeds, so a render/save retry does not retranslate completed paragraphs.
    using provider-specific response formats or reasoning flags.
 2. Add renderer modes against the same normalized project; translation cache remains reusable.
 3. Add schema migrations before changing stored block IDs or rectangle conventions.
-4. Add a source-page review canvas for correction of host segmentation and missing graphics.
+4. Extend the source-page preview into a review canvas for correction of host segmentation and missing graphics.
 5. Treat OCR and alternate structure engines as independent extractors with provenance.
 6. A future reader extension can link a rendered block marker to its project ID and edit window.
 7. Add opt-in backup/sync of project files; never place credentials in a syncable document.
