@@ -43,8 +43,10 @@
   </details>
   <nav aria-label="翻译操作">
     <button id="start" class="primary">翻译并生成 PDF</button>
+    <button id="restart">重新翻译并生成 PDF</button>
     <button id="cancel" disabled="disabled">取消</button>
   </nav>
+  <p class="hint">「翻译并生成 PDF」复用已有译文；「重新翻译并生成 PDF」使用当前模型重译自动译文，保留人工修订和本文术语表。通过校验后逐段保存，中断可续跑；完成后更新同一阅读副本。</p>
   <label class="inline"><input id="vision-before-review" type="checkbox" />生成 PDF 前，自动检查并修复疑难段落（无需人工确认）</label>
   <p class="hint">使用当前支持图片的模型自动识别、复查和重译，只上传目标区域及公式细节，使用对应服务的额度。先核验并复用已有中文；复杂公式可单独按原貌嵌入，中文继续排版。最终无法确认的内容明确保留原图；已有译文和人工修订保留。</p>
   <section id="task-progress" data-busy="false" aria-label="任务进度">
@@ -83,7 +85,7 @@
   <footer>
     <label class="inline"><input id="make-preferred" type="checkbox" checked="checked" />生成后优先打开双语 PDF</label>
     <div class="row"><button id="prefer-original">优先打开原文</button><button id="export">导出修订项目</button><button id="import">导入修订项目（覆盖译文）</button></div>
-    <p class="hint">项目自动保存在本机 Zotero 数据目录，默认不随 Zotero 同步。每次生成新 PDF 附件；旧版批注不会自动迁移。</p>
+    <p class="hint">项目自动保存在本机 Zotero 数据目录，默认不随 Zotero 同步。重新生成会覆盖同一 PDF 附件；成功后重复译本移入回收站。现有批注记录保留，重排后位置可能偏移。</p>
     <p class="hint">优先打开选择保存在本机，重启后保留；停用插件后使用 Zotero 默认顺序。原文附件始终保留。</p>
   </footer>
   <script src="workbench.js"></script>

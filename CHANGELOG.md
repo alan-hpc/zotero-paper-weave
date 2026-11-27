@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-alpha.52
+
+- Add a primary “Retranslate and generate PDF” action beside cached generation. Request the current ordered provider for automatic body/headings despite populated caches; retain manual revisions, glossary, original graphics and references.
+- Keep old wording until each replacement passes existing validation. Persist a source/layout/glossary/configuration-bound pending set with each successful paragraph; resume only unfinished work after failure, cancellation or restart. Revisit old automatic original-preservation decisions.
+- Resume a saved full-retranslation job from either primary action. Retain its completed state through rendering/attachment failures and clear it only after successful PDF persistence. Reuse the existing automatic repair and single-attachment lifecycle.
+- Show “Continue retranslation and generate PDF” while a run is saved, share the existing task lock/cancel control, and explain both actions. Correct the footer to describe same-attachment replacement and recoverable duplicate cleanup.
+- Add checkpoint/provenance validation and workbench regressions with real PDFs for selected-model requests, populated-cache refresh, manual/reference exclusion, partial failure, restart/resume, cached generation and cancellation.
+
 ## 0.1.0-alpha.51
 
 - Keep one active generated PDF per paper: reuse the preferred generated attachment or the newest known output, preserve key/title/path and annotation records, and update its source-revision mapping. Isolate standalone PDFs and libraries; never identify ownership by title.

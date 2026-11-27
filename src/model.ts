@@ -86,6 +86,8 @@ export interface Project {
   /** Completed per-paper terminology requests, saved so a long analysis can resume. */
   terminologyBatches?: TermBatch[];
   outputs: { key: string; created: string; updated?: string }[];
+  /** Explicit full-retranslation run. Old wording remains until each new result passes. */
+  retranslation?:{version:1;key:string;pending:string[];total:number;started:string};
   created: string;
   updated: string;
 }
@@ -239,6 +241,12 @@ export function validateProject(p: unknown): asserts p is Project {
       }
     }
     ids.add(b.id);
+  }
+  if(a.retranslation){const r=a.retranslation;
+    if(r.version!==1||typeof r.key!=='string'||!/^[a-f0-9]{16}$/u.test(r.key)||
+      !Array.isArray(r.pending)||new Set(r.pending).size!==r.pending.length||r.pending.some(id=>typeof id!=='string'||!ids.has(id))||
+      !Number.isInteger(r.total)||r.total<r.pending.length||r.total>a.blocks.length||typeof r.started!=='string'||!Number.isFinite(Date.parse(r.started)))
+      throw new Error('全文重译进度格式无效。');
   }
   if (a.terms.some(t => typeof t.source !== 'string' || typeof t.reason !== 'string')) {
     throw new Error('术语格式无效。');

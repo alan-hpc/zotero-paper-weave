@@ -13,6 +13,7 @@ import {copyBytes} from './bytes';
 import {applyProseGroups} from './proseGroups';
 import {inlineMathPlan} from './mathPresentation';
 import {visionRenderBlock} from './vision';
+import {beginRetranslation,completeRetranslationBlock} from './retranslation';
 
 async function initialize() {
 const host = (window as any).arguments[0];
@@ -39,7 +40,7 @@ let providerOrder:ProviderName[]=[...PROVIDERS];
 let taskProvider:ProviderName|undefined;
 const priorityActions=PROVIDERS.flatMap(name=>[`${name}-up`,`${name}-down`]);
 const settingActions=[...priorityActions,'save-settings','use-codex-proxy','delete-key','delete-codex-key','delete-deepseek-key'];
-const actions = ['start','terms-action','translate','repair-review','vision-recognize','vision-preview','vision-save','vision-apply','vision-restore','retranslate','import','export','save-edit','save-terms',...settingActions,'prefer-original'];
+const actions = ['start','restart','terms-action','translate','repair-review','vision-recognize','vision-preview','vision-save','vision-apply','vision-restore','retranslate','import','export','save-edit','save-terms',...settingActions,'prefer-original'];
 const profileIDs={codex:{base:'codex-base',model:'codex-model',key:'codex-key',status:'codex-key-status'},
   deepseek:{base:'deepseek-base',model:'deepseek-model',key:'deepseek-key',status:'deepseek-key-status'},
   custom:{base:'base',model:'model',key:'key',status:'key-status'}};
@@ -225,6 +226,7 @@ function showVision(block:Block){
 }
 function refresh() {
   if (!project) return;
+  $('restart').textContent=project.retranslation?'继续重译并生成 PDF':'重新翻译并生成 PDF';
   area('terms').value = project.terms.map(t => t.source).join('\n');
   $('terms-action').textContent = project.terminologyReady ? '重新识别术语（覆盖词表）' :
     project.terminologyBatches?.length ? `继续识别术语（已保存 ${project.terminologyBatches.length} 批）` : '识别本文术语';
@@ -315,8 +317,10 @@ async function translateRemaining(client: Provider, settings: Settings, signal: 
   if (!project!.terminologyReady) {
     await identifyTerms(client);
   }
-  const pending = project!.blocks.filter(b => canTranslate(b) && !automaticOriginalMatches(project!,b) && (!onlyIDs||onlyIDs.has(b.id))&&(reviewOnly?needsReview(b)&&!b.edited:!b.translation.trim()));
-  const total=reviewOnly?pending.length:project!.blocks.filter(canTranslate).length;
+  const forced=project!.retranslation?new Set(project!.retranslation.pending):undefined;
+  const pending = project!.blocks.filter(b => canTranslate(b) && !automaticOriginalMatches(project!,b) && (!onlyIDs||onlyIDs.has(b.id))&&
+    (reviewOnly?needsReview(b)&&!b.edited:forced?.has(b.id)&&!b.edited||!b.translation.trim()));
+  const total=reviewOnly?pending.length:forced?project!.retranslation!.total:project!.blocks.filter(canTranslate).length;
   const initial=total-pending.length;
   phase('逐段翻译',initial,total,'段');
   const concurrency=Math.min(TRANSLATION_CONCURRENCY,pending.length);
@@ -338,6 +342,7 @@ async function translateRemaining(client: Provider, settings: Settings, signal: 
       try {
         const translation=await client.translate(block,project!);
         recordTranslation(block,translation,settings);
+        completeRetranslationBlock(project!,block.id);
         revision++;dirty=true;
         await save();
         completed++;list();
@@ -400,6 +405,9 @@ async function repairReview(signal:AbortSignal,onlyIDs?:Set<string>){
           revision++;dirty=true;await save();
         }
       },signal);
+      if(project!.retranslation?.pending.includes(b.id)&&(!visionNeedsReview(b)||automaticOriginalMatches(project!,b))){
+        completeRetranslationBlock(project!,b.id);revision++;dirty=true;await save();
+      }
     }
     list();status('自动检查与恢复已完成；可复用的中文已保留，复杂公式可按原貌嵌入，无需人工确认。');return;
   }
@@ -507,9 +515,21 @@ async function generatePDF(signal: AbortSignal) {
   if(result.outputWarning)status(`PDF 已保存；${result.outputWarning}。`);
 }
 bind('prefer-original', () => run(async () => { await host.preferOriginal(host.item); status('这篇论文已改为优先打开原文。'); }));
-bind('start', () => run(async signal => {
+async function translateAndGenerate(signal:AbortSignal,retranslate=false) {
   applyGraphicRegions(project!);applyProseGroups(project!);
   revision++;dirty=true;await save();
+  if(retranslate||project!.retranslation){
+    const {client,settings}=await provider(signal);
+    if(!project!.terminologyReady)await identifyTerms(client);
+    const pending=beginRetranslation(project!,formSettings());
+    revision++;dirty=true;await save();
+    try{await translateRemaining(client,settings,signal,false,pending);}
+    catch(error:any){
+      if(error?.code!=='PW_PROTECTION_BATCH'||!input('vision-before-review').checked)throw error;
+      await repairReview(signal,new Set(error.blockIDs));
+    }
+    if(project!.retranslation?.pending.length)throw new Error(`还有 ${project!.retranslation.pending.length} 段重译未完成。旧 PDF 保留，点击「继续重译并生成 PDF」续跑。`);
+  }
   const formulaResume=project!.blocks.filter(b=>canTranslate(b)&&!b.edited&&b.formulaProgress).map(b=>b.id);
   if(input('vision-before-review').checked&&formulaResume.length)await repairReview(signal,new Set(formulaResume));
   if(project!.blocks.some(block=>canTranslate(block)&&!automaticOriginalMatches(project!,block)&&!block.translation.trim())) {
@@ -526,12 +546,14 @@ bind('start', () => run(async signal => {
     if(unresolved.length)throw new Error(`自动恢复未完成：${reviewDetails(unresolved)}。已有进度已保存。`);
   }
   for(let attempt=0;attempt<2;attempt++){
-    try{await generatePDF(signal);return;}
+    try{await generatePDF(signal);if(project!.retranslation){delete project!.retranslation;revision++;dirty=true;await save();}return;}
     catch(error:any){if(error?.code!=='PW_RENDER_REPAIR')throw error;
       await repairReview(signal,new Set(error.blockIDs));}
   }
   throw new Error('PDF 排版自动恢复仍未完成，已有译文和进度已保留。');
-}));
+}
+bind('start', () => run(signal=>translateAndGenerate(signal)));
+bind('restart', () => run(signal=>translateAndGenerate(signal,true)));
 bind('export', () => run(async () => { await host.exportProject(window, project); status('导出操作完成。项目包含论文文本，请按需要保管。'); }));
 bind('import', () => run(async () => { const p = await host.importProject(window,host.item,project); if (p) { project = p; status('已导入修订；可以重新生成 PDF。'); } }));
 $('filter').addEventListener('change', list);

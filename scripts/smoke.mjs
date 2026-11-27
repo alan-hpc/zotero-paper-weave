@@ -48,6 +48,8 @@ try {
   await verifyCodexProxy();
   const {verifyWorkbenchWindows}=await import('./workbench-window-regression.mjs');
   await verifyWorkbenchWindows(moduleFor);
+  const {verifyRetranslation}=await import('./retranslation-regression.mjs');
+  await verifyRetranslation(moduleFor);
   const {verifyOutputLifecycle}=await import('./output-lifecycle-regression.mjs');
   await verifyOutputLifecycle(moduleFor);
   const {verifyPaperSessions}=await import('./paper-session-regression.mjs');
@@ -1025,6 +1027,56 @@ try {
   assert.match(elements.get('status').textContent,/已生成.*PDF/);
   assert.equal(boundary.targets.length,3,'clone each of the PDF, serif font and mono font into the consumer realm');
   console.log('PASS workbench binary boundary: wrapped PDF and both fonts produce a real one-page attachment');
+  // Exercise the new primary action with a full old cache and real PDF bytes.
+  loadedProject.blocks=[
+    {id:'alpha',kind:'body',source:'Alpha kernel overlaps communication.',translation:'旧译文甲。',edited:false,rects:[[0,40,600,550,625]]},
+    {id:'beta',kind:'body',source:'Beta kernel resumes computation.',translation:'旧译文乙。',edited:false,rects:[[0,40,550,550,575]]},
+    {id:'gamma',kind:'body',source:'Gamma kernel issues remote stores.',translation:'旧译文丙。',edited:false,rects:[[0,40,500,550,525]]},
+    {id:'manual',kind:'body',source:'A manually revised paragraph.',translation:'人工修订保持原样。',edited:true,rects:[[0,40,450,550,475]]},
+    {id:'reference',kind:'reference',source:'Original reference.',translation:'',edited:false,rects:[[0,40,400,550,425]]}
+  ];
+  loadedProject.terms=[];loadedProject.terminologyReady=true;delete loadedProject.retranslation;
+  elements.get('codex-enabled').checked=true;elements.get('deepseek-enabled').checked=false;elements.get('custom-enabled').checked=false;
+  elements.get('codex-base').value='http://127.0.0.1:47771/v1';elements.get('codex-model').value='gpt-6.1-terra';
+  bridge.cloneBytes=structuredClone;bridge.sourceBytes=async()=>sourceBytes;bridge.fontBytes=async()=>fontBytes;bridge.monoFontBytes=async()=>monoBytes;
+  let retranslatedPDFs=0;const fullCalls=[];let betaFails=true;
+  bridge.attachPDF=async(_item,_project,bytes)=>{assert.ok((await PDFDocument.load(new Uint8Array(bytes))).getPageCount()>=1);retranslatedPDFs++;return{preferredSet:false,updated:true};};
+  uiContext.fetch=async(url,options)=>{
+    assert.equal(url,'http://127.0.0.1:47771/v1/chat/completions');
+    const body=JSON.parse(options.body),p=JSON.parse(body.messages[1].content);assert.equal(body.model,'gpt-6.1-terra');
+    fullCalls.push(p.paragraph);
+    if(p.paragraph.startsWith('Beta')&&betaFails)return{ok:false,status:401};
+    return{ok:true,json:async()=>({choices:[{message:{content:JSON.stringify({translation:'新模型译文 '+p.paragraph})}}]})};
+  };
+  elements.get('restart').listeners.get('click')();await waitAutomaticTask();
+  assert.equal(fullCalls.length,3,'every automatic cached paragraph is requested once');
+  assert.equal(retranslatedPDFs,0,'a partial forced translation never replaces the previous PDF');
+  assert.equal(loadedProject.blocks[1].translation,'旧译文乙。','failed requests preserve old wording');
+  assert.ok(loadedProject.blocks[0].translation.startsWith('新模型译文'));assert.ok(loadedProject.blocks[2].translation.startsWith('新模型译文'));
+  assert.deepEqual(Array.from(loadedProject.retranslation.pending),['beta']);
+  assert.equal(elements.get('restart').textContent,'继续重译并生成 PDF');
+  assert.equal(loadedProject.blocks[3].translation,'人工修订保持原样。');assert.equal(loadedProject.blocks[3].edited,true);
+  const resumedCopy=JSON.parse(JSON.stringify(loadedProject));Object.assign(loadedProject,resumedCopy);betaFails=false;fullCalls.length=0;
+  elements.get('start').listeners.get('click')();await waitAutomaticTask();
+  assert.deepEqual(fullCalls,['Beta kernel resumes computation.'],'the normal primary action also resumes a saved forced run');
+  assert.equal(retranslatedPDFs,1,elements.get('status').textContent);assert.equal(loadedProject.retranslation,undefined);
+  assert.equal(elements.get('restart').textContent,'重新翻译并生成 PDF');
+  assert.ok(loadedProject.blocks.slice(0,3).every(b=>b.translatedWith.model==='gpt-6.1-terra'));
+  assert.equal(loadedProject.blocks[3].translation,'人工修订保持原样。');
+  fullCalls.length=0;elements.get('start').listeners.get('click')();await waitAutomaticTask();
+  assert.equal(fullCalls.length,0,'ordinary generation continues to reuse a completed cache');assert.equal(retranslatedPDFs,2);
+  const beforeCancel=loadedProject.blocks.map(b=>b.translation);
+  uiContext.fetch=async(_url,options)=>new Promise((_resolve,reject)=>{
+    if(options.signal.aborted)reject(new DOMException('cancelled','AbortError'));
+    else options.signal.addEventListener('abort',()=>reject(new DOMException('cancelled','AbortError')),{once:true});
+  });
+  elements.get('restart').listeners.get('click')();await new Promise(r=>setTimeout(r,0));
+  assert.equal(elements.get('restart').disabled,true,'full retranslation shares the existing task lock');
+  elements.get('cancel').listeners.get('click')();await waitAutomaticTask();
+  assert.deepEqual(loadedProject.blocks.map(b=>b.translation),beforeCancel);assert.equal(retranslatedPDFs,2);
+  assert.equal(loadedProject.retranslation.pending.length,3);assert.equal(elements.get('restart').disabled,false);
+  delete loadedProject.retranslation;
+  console.log('PASS retranslate-and-generate action: selected model, complete-cache refresh, old-wording retention, manual/reference exclusion, saved partial resume, real PDF completion, ordinary cache reuse, task lock and cancellation');
   const outputDir=process.env.PAPERWEAVE_SMOKE_OUTPUT;
   if(outputDir) { await mkdir(outputDir,{recursive:true});await writeFile(join(outputDir,'layout-B-smoke.pdf'),result);await writeFile(join(outputDir,'layout-B-revised.pdf'),revised);await writeFile(join(outputDir,'placements.json'),JSON.stringify(placements,null,2)); }
   project.blocks[1].translation='';

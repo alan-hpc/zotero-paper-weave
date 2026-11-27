@@ -195,6 +195,13 @@ The chosen attachment retains its annotation records; duplicate annotations rema
 attachments. Reflow can shift annotation locations; automatic remapping is outside this alpha.
 Search caches and open readers are refreshed after commit; refresh failures are reported separately.
 
+An explicit full-retranslation run stores a source/layout/glossary/provider-configuration-bound
+`retranslation` pending set. The old text remains until each new result passes the existing validation;
+manual blocks and original-only regions are excluded. Each success updates wording and the pending
+set in the same project snapshot. Cancellation/service failures leave unfinished IDs intact. Both
+primary actions resume that set; completed translation state remains until PDF attachment persistence
+succeeds, so a render/save retry does not retranslate completed paragraphs.
+
 ## Extension points
 
 1. Keep new provider adapters separate from Zotero storage. Add explicit capability metadata before
